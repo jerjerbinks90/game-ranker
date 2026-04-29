@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 
 const SCORES = Array.from({ length: 21 }, (_, i) => +(10 - i * 0.5).toFixed(1));
-const BGG_ENDPOINT = "/.netlify/functions/bgg";
-const STORAGE_KEY = "game-ranker-v1";
+const STORAGE_KEY = "game-ranker-v2";
 
 const scoreColor = (s) => {
   if (s >= 9.5) return "#f0c040";
@@ -15,26 +14,24 @@ const scoreColor = (s) => {
   return "#666";
 };
 
-async function fetchBGGCollection(username, onStatus) {
-  const url = `${BGG_ENDPOINT}?username=${encodeURIComponent(username)}`;
-  onStatus("Fetching your BGG collection…");
+function parseCSV(text) {
+  const lines = text.trim().split("\n");
+  if (lines.length < 2) return [];
 
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Request failed (${res.status}). Try again.`);
+  const headers = lines[0].split(",").map(h => h.replace(/^"|"$/g, "").trim().toLowerCase());
+  const nameIdx = headers.findIndex(h => h === "objectname" || h === "game name" || h === "name");
+  const playsIdx = headers.findIndex(h => h === "numplays" || h === "plays" || h === "number of plays");
 
-  const xml = await res.text();
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(xml, "text/xml");
+  if (nameIdx === -1) return [];
 
-  const errorEl = doc.querySelector("error message");
-  if (errorEl) throw new Error(errorEl.textContent);
-
-  const items = Array.from(doc.querySelectorAll("item"));
-  if (items.length === 0) {
-    throw new Error("No played games found. Make sure your BGG collection is public and you have logged plays.");
+  const games = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].match(/(".*?"|[^",]+)(?=\s*,|\s*$)/g) || [];
+    const name = cols[nameIdx]?.replace(/^"|"$/g, "").trim();
+    const plays = playsIdx !== -1 ? parseInt(cols[playsIdx]?.replace(/^"|"$/g, "").trim()) || 0 : 0;
+    if (name) games.push({ name, plays });
   }
-
-  return items.map((item) => item.querySelector("name")?.textContent?.trim()).filter(Boolean);
+  return games;
 }
 
 function loadState() {
@@ -42,68 +39,92 @@ function loadState() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
   } catch {}
-  return { buckets: {}, unranked: [] };
+  return { buckets: {}, unranked: [], playCounts: {} };
 }
 
-function saveState(buckets, unranked) {
+function saveState(buckets, unranked, playCounts) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ buckets, unranked }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ buckets, unranked, playCounts }));
   } catch {}
 }
 
 export default function App() {
   const [buckets, setBuckets] = useState({});
   const [unranked, setUnranked] = useState([]);
+  const [playCounts, setPlayCounts] = useState({});
   const [input, setInput] = useState("");
   const [held, setHeld] = useState(null);
-  const [showImport, setShowImport] = useState(false);
-  const [bggUsername, setBggUsername] = useState("");
   const [importStatus, setImportStatus] = useState(null);
   const [importMessage, setImportMessage] = useState("");
   const drag = useRef(null);
   const [dragOver, setDragOver] = useState(null);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
-    const { buckets: b, unranked: u } = loadState();
+    const { buckets: b, unranked: u, playCounts: p } = loadState();
     setBuckets(b);
     setUnranked(u);
+    setPlayCounts(p || {});
   }, []);
 
-  const commit = (b, u) => { setBuckets(b); setUnranked(u); saveState(b, u); };
+  const commit = (b, u, p) => {
+    setBuckets(b);
+    setUnranked(u);
+    setPlayCounts(p);
+    saveState(b, u, p);
+  };
 
   const addGame = () => {
     const name = input.trim();
     if (!name) return;
-    commit(buckets, [name, ...unranked]);
+    if (unranked.includes(name) || Object.values(buckets).flat().includes(name)) return;
+    commit(buckets, [name, ...unranked], playCounts);
     setInput("");
   };
 
-  const handleImport = async () => {
-    const username = bggUsername.trim();
-    if (!username) return;
+  const handleCSVImport = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
     setImportStatus("loading");
-    try {
-      const games = await fetchBGGCollection(username, setImportMessage);
-      const existing = new Set([...unranked, ...Object.values(buckets).flat()]);
-      const newGames = games.filter((g) => !existing.has(g));
-      commit(buckets, [...newGames, ...unranked]);
-      setImportStatus("success");
-      const skipped = games.length - newGames.length;
-      setImportMessage(
-        newGames.length > 0
-          ? `Added ${newGames.length} game${newGames.length !== 1 ? "s" : ""}.${skipped > 0 ? ` ${skipped} already present, skipped.` : ""}`
-          : "All your BGG games are already in your list."
-      );
-      setTimeout(() => {
-        setShowImport(false);
-        setImportStatus(null);
-        setImportMessage("");
-        setBggUsername("");
-      }, 3500);
-    } catch (err) {
-      setImportStatus("error");
-      setImportMessage(err.message);
-    }
+    setImportMessage("Reading CSV…");
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const games = parseCSV(evt.target.result);
+        if (games.length === 0) {
+          setImportStatus("error");
+          setImportMessage("Couldn't read the CSV. Make sure it's a BGG collection export.");
+          return;
+        }
+
+        const allRanked = Object.values(buckets).flat();
+        const existing = new Set([...unranked, ...allRanked]);
+
+        // Update play counts for all games in CSV
+        const newPlayCounts = { ...playCounts };
+        games.forEach(({ name, plays }) => {
+          if (plays > 0) newPlayCounts[name] = plays;
+        });
+
+        // Only add games not already in the list
+        const newGames = games.filter(({ name }) => !existing.has(name)).map(g => g.name);
+        const newUnranked = [...newGames, ...unranked];
+
+        commit(buckets, newUnranked, newPlayCounts);
+        setImportStatus("success");
+        const skipped = games.length - newGames.length;
+        setImportMessage(
+          `Added ${newGames.length} game${newGames.length !== 1 ? "s" : ""} to unranked.${skipped > 0 ? ` ${skipped} already in your list (play counts updated).` : ""}`
+        );
+        setTimeout(() => { setImportStatus(null); setImportMessage(""); }, 4000);
+      } catch {
+        setImportStatus("error");
+        setImportMessage("Failed to parse CSV. Try re-exporting from BGG.");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
   };
 
   const getList = (bucket) => bucket === "unranked" ? unranked : buckets[bucket] || [];
@@ -127,7 +148,7 @@ export default function App() {
     if (held) {
       if (held.bucket === bucket && held.idx === idx) { setHeld(null); return; }
       const { b, u } = applyMove(held.bucket, held.idx, bucket, idx);
-      setHeld(null); commit(b, u);
+      setHeld(null); commit(b, u, playCounts);
     } else {
       setHeld({ bucket, idx, name: getList(bucket)[idx] });
     }
@@ -136,7 +157,7 @@ export default function App() {
   const handleSlotTap = (bucket, insertBefore) => {
     if (!held) return;
     const { b, u } = applyMove(held.bucket, held.idx, bucket, insertBefore);
-    setHeld(null); commit(b, u);
+    setHeld(null); commit(b, u, playCounts);
   };
 
   const deleteGame = (bucket, idx, e) => {
@@ -144,7 +165,7 @@ export default function App() {
     if (held?.bucket === bucket && held?.idx === idx) setHeld(null);
     let b = { ...buckets }; let u = [...unranked];
     if (bucket === "unranked") { u.splice(idx, 1); } else { b[bucket] = [...(b[bucket] || [])]; b[bucket].splice(idx, 1); }
-    commit(b, u);
+    commit(b, u, playCounts);
   };
 
   const onDragStart = (bucket, idx) => { drag.current = { bucket, idx }; };
@@ -154,7 +175,7 @@ export default function App() {
     if (!drag.current) return;
     const { bucket: fb, idx: fi } = drag.current;
     const { b, u } = applyMove(fb, fi, toBucket, insertBefore);
-    drag.current = null; setDragOver(null); commit(b, u);
+    drag.current = null; setDragOver(null); commit(b, u, playCounts);
   };
   const onDragEnd = () => { drag.current = null; setDragOver(null); };
 
@@ -198,6 +219,7 @@ export default function App() {
             const beingMoved = held?.bucket === bucket && held?.idx === i;
             const rank = !isUnrankedBucket ? ranks[`${bucket}-${i}`] : null;
             const isDragging = drag.current?.bucket === bucket && drag.current?.idx === i;
+            const plays = playCounts[name];
 
             return (
               <div key={`${name}-${i}`}>
@@ -225,6 +247,15 @@ export default function App() {
                   <span style={{ flex: 1, color: beingMoved ? color : "#d8cbb0", fontSize: 14, fontFamily: "'Playfair Display', serif", fontWeight: 400, letterSpacing: 0.2 }}>
                     {name}
                   </span>
+                  {plays > 0 && (
+                    <span style={{
+                      fontSize: 10, fontFamily: "'Space Mono', monospace",
+                      color: beingMoved ? color + "99" : "#333",
+                      flexShrink: 0, letterSpacing: 0.3,
+                    }}>
+                      {plays}×
+                    </span>
+                  )}
                   <button onClick={(e) => deleteGame(bucket, i, e)}
                     style={{ background: "none", border: "none", color: "#282828", cursor: "pointer", fontSize: 15, padding: "0 3px", lineHeight: 1, flexShrink: 0 }}
                     onMouseEnter={(e) => (e.currentTarget.style.color = "#8a3030")}
@@ -252,6 +283,14 @@ export default function App() {
 
   return (
     <div style={{ background: "#0d0d0d", minHeight: "100vh" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600&family=Space+Mono:wght@400;700&display=swap');
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        button:focus { outline: none; }
+        input:focus { outline: none; }
+        input::placeholder { color: #333; }
+      `}</style>
+
       <div style={{ padding: "20px 16px 14px", background: "#0f0f0f", borderBottom: "1px solid #1c1c1c", position: "sticky", top: 0, zIndex: 50 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
           <div style={{ fontFamily: "'Playfair Display', serif", color: "#c8880a", fontSize: 20, letterSpacing: 1 }}>
@@ -263,65 +302,27 @@ export default function App() {
             )}
           </div>
           <button
-            onClick={() => { setShowImport(!showImport); setImportStatus(null); setImportMessage(""); }}
+            onClick={() => fileInputRef.current?.click()}
             style={{
-              background: showImport ? "#1a1200" : "transparent",
-              border: `1px solid ${showImport ? "#c8880a" : "#2a2a2a"}`,
-              borderRadius: 8, color: showImport ? "#c8880a" : "#444",
-              padding: "6px 12px", cursor: "pointer",
+              background: "transparent", border: "1px solid #2a2a2a",
+              borderRadius: 8, color: "#444", padding: "6px 12px", cursor: "pointer",
               fontFamily: "'Space Mono', monospace", fontSize: 11, letterSpacing: 0.5,
             }}
           >
-            BGG IMPORT
+            BGG CSV
           </button>
+          <input ref={fileInputRef} type="file" accept=".csv" onChange={handleCSVImport} style={{ display: "none" }} />
         </div>
 
-        {showImport && (
-          <div style={{ background: "#121000", border: "1px solid #2a2000", borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
-            <div style={{ color: "#555", fontSize: 11, fontFamily: "'Space Mono', monospace", marginBottom: 8, letterSpacing: 0.5 }}>
-              IMPORT PLAYED GAMES FROM BGG
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <input
-                value={bggUsername}
-                onChange={(e) => setBggUsername(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && importStatus !== "loading" && handleImport()}
-                placeholder="BGG username…"
-                disabled={importStatus === "loading"}
-                style={{
-                  flex: 1, background: "#1a1600", border: "1px solid #2a2200",
-                  borderRadius: 8, color: "#e0d0b0", padding: "8px 12px",
-                  fontSize: 14, fontFamily: "'Playfair Display', serif",
-                  opacity: importStatus === "loading" ? 0.5 : 1,
-                }}
-              />
-              <button
-                onClick={handleImport}
-                disabled={importStatus === "loading" || !bggUsername.trim()}
-                style={{
-                  background: importStatus === "loading" ? "#2a1a00" : "#c8880a",
-                  border: "none", borderRadius: 8,
-                  color: importStatus === "loading" ? "#c8880a" : "#0d0d0d",
-                  fontWeight: 700, padding: "0 14px", minWidth: 60,
-                  cursor: importStatus === "loading" || !bggUsername.trim() ? "default" : "pointer",
-                  fontFamily: "'Space Mono', monospace", fontSize: 11, letterSpacing: 0.5,
-                  opacity: !bggUsername.trim() ? 0.4 : 1,
-                }}
-              >
-                {importStatus === "loading" ? "…" : "FETCH"}
-              </button>
-            </div>
-            {importMessage && (
-              <div style={{
-                marginTop: 8, fontSize: 12, fontFamily: "'Space Mono', monospace", lineHeight: 1.6,
-                color: importStatus === "error" ? "#b05050" : importStatus === "success" ? "#60d090" : "#888",
-              }}>
-                {importMessage}
-              </div>
-            )}
-            <div style={{ marginTop: 8, color: "#2a2a2a", fontSize: 10, fontFamily: "'Space Mono', monospace", lineHeight: 1.6 }}>
-              Pulls games with logged plays. Expansions excluded. Already-ranked games skipped. BGG collection must be public.
-            </div>
+        {importMessage && (
+          <div style={{
+            marginBottom: 10, padding: "8px 12px",
+            background: importStatus === "error" ? "#1a0000" : importStatus === "success" ? "#001a08" : "#1a1200",
+            border: `1px solid ${importStatus === "error" ? "#b05050" : importStatus === "success" ? "#60d090" : "#c8880a"}33`,
+            borderRadius: 8, fontSize: 12, fontFamily: "'Space Mono', monospace", lineHeight: 1.6,
+            color: importStatus === "error" ? "#b05050" : importStatus === "success" ? "#60d090" : "#888",
+          }}>
+            {importMessage}
           </div>
         )}
 
@@ -329,7 +330,7 @@ export default function App() {
           <input
             value={input} onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && addGame()}
-            placeholder="Or add a game manually…"
+            placeholder="Add a game manually…"
             style={{
               flex: 1, background: "#161616", border: "1px solid #222",
               borderRadius: 8, color: "#e0d0b0", padding: "9px 12px",
