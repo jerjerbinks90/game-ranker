@@ -64,6 +64,8 @@ export default function App() {
   const [held, setHeld] = useState(null);
   const [importStatus, setImportStatus] = useState(null);
   const [importMessage, setImportMessage] = useState("");
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState(new Set());
   const drag = useRef(null);
   const [dragOver, setDragOver] = useState(null);
   const fileInputRef = useRef(null);
@@ -121,6 +123,27 @@ export default function App() {
     e.target.value = "";
   };
 
+  const toggleSelectMode = () => {
+    setSelectMode(!selectMode);
+    setSelected(new Set());
+    setHeld(null);
+  };
+
+  const toggleSelect = (name) => {
+    const next = new Set(selected);
+    if (next.has(name)) next.delete(name); else next.add(name);
+    setSelected(next);
+  };
+
+  const deleteSelected = () => {
+    let b = { ...buckets };
+    let u = unranked.filter(n => !selected.has(n));
+    Object.keys(b).forEach(k => { b[k] = b[k].filter(n => !selected.has(n)); });
+    setSelected(new Set());
+    setSelectMode(false);
+    commit(b, u, playCounts);
+  };
+
   const getList = (bucket) => bucket === "unranked" ? unranked : buckets[bucket] || [];
 
   const applyMove = (fromBucket, fromIdx, toBucket, insertBefore) => {
@@ -138,17 +161,19 @@ export default function App() {
   };
 
   const handleGameTap = (bucket, idx) => {
+    const name = getList(bucket)[idx];
+    if (selectMode) { toggleSelect(name); return; }
     if (held) {
       if (held.bucket === bucket && held.idx === idx) { setHeld(null); return; }
       const { b, u } = applyMove(held.bucket, held.idx, bucket, idx);
       setHeld(null); commit(b, u, playCounts);
     } else {
-      setHeld({ bucket, idx, name: getList(bucket)[idx] });
+      setHeld({ bucket, idx, name });
     }
   };
 
   const handleSlotTap = (bucket, insertBefore) => {
-    if (!held) return;
+    if (!held || selectMode) return;
     const { b, u } = applyMove(held.bucket, held.idx, bucket, insertBefore);
     setHeld(null); commit(b, u, playCounts);
   };
@@ -161,7 +186,7 @@ export default function App() {
     commit(b, u, playCounts);
   };
 
-  const onDragStart = (bucket, idx) => { drag.current = { bucket, idx }; };
+  const onDragStart = (bucket, idx) => { if (selectMode) return; drag.current = { bucket, idx }; };
   const onDragOver = (e, bucket, insertBefore) => { e.preventDefault(); setDragOver({ bucket, insertBefore }); };
   const onDrop = (e, toBucket, insertBefore) => {
     e.preventDefault();
@@ -185,7 +210,7 @@ export default function App() {
     return (
       <div key={bucket} style={{ display: "flex", alignItems: "stretch", minHeight: isEmpty && !held ? 24 : undefined, borderBottom: "1px solid #e8e0d0" }}>
         <div
-          onClick={() => held && handleSlotTap(bucket, null)}
+          onClick={() => held && !selectMode && handleSlotTap(bucket, null)}
           onDragOver={(e) => onDragOver(e, bucket, null)}
           onDrop={(e) => onDrop(e, bucket, null)}
           style={{
@@ -195,7 +220,7 @@ export default function App() {
             color: isEmpty && !held ? "#ccc" : color,
             borderRight: `2px solid ${isEmpty && !held ? "#e8e0d0" : color + "55"}`,
             background: isEmpty && !held ? "#faf8f4" : bg,
-            cursor: held ? "pointer" : "default",
+            cursor: held && !selectMode ? "pointer" : "default",
             transition: "color 0.15s, background 0.15s",
             userSelect: "none",
           }}
@@ -208,7 +233,7 @@ export default function App() {
           onDragOver={(e) => { if (isEmpty) onDragOver(e, bucket, null); }}
           onDrop={(e) => { if (isEmpty) onDrop(e, bucket, null); }}
         >
-          {held && <InsertSlot onClick={() => handleSlotTap(bucket, 0)} color={color} />}
+          {held && !selectMode && <InsertSlot onClick={() => handleSlotTap(bucket, 0)} color={color} />}
           {dragOver?.bucket === bucket && dragOver.insertBefore === 0 && <DropLine color={color} />}
 
           {games.map((name, i) => {
@@ -216,33 +241,45 @@ export default function App() {
             const rank = !isUnrankedBucket ? ranks[`${bucket}-${i}`] : null;
             const isDragging = drag.current?.bucket === bucket && drag.current?.idx === i;
             const plays = playCounts[name];
+            const isSelected = selected.has(name);
 
             return (
               <div key={`${name}-${i}`}>
                 <div
-                  draggable onDragStart={() => onDragStart(bucket, i)} onDragEnd={onDragEnd}
+                  draggable={!selectMode}
+                  onDragStart={() => onDragStart(bucket, i)} onDragEnd={onDragEnd}
                   onDragOver={(e) => { e.stopPropagation(); onDragOver(e, bucket, i); }}
                   onDrop={(e) => { e.stopPropagation(); onDrop(e, bucket, i); }}
                   onClick={() => handleGameTap(bucket, i)}
                   style={{
                     display: "flex", alignItems: "center", gap: 6,
                     padding: "5px 8px 5px 10px", margin: "2px 3px",
-                    background: beingMoved ? color + "18" : isDragging ? "#f0ebe0" : "#fff",
-                    border: beingMoved ? `1px solid ${color}88` : `1px solid ${held ? color + "33" : "#e0d8cc"}`,
+                    background: isSelected ? "#ffeef0" : beingMoved ? color + "18" : isDragging ? "#f0ebe0" : "#fff",
+                    border: isSelected ? "1px solid #e08090" : beingMoved ? `1px solid ${color}88` : `1px solid ${held && !selectMode ? color + "33" : "#e0d8cc"}`,
                     borderRadius: 6,
-                    cursor: beingMoved ? "grabbing" : held ? "pointer" : "grab",
+                    cursor: selectMode ? "pointer" : beingMoved ? "grabbing" : held ? "pointer" : "grab",
                     opacity: isDragging ? 0.4 : 1,
                     boxShadow: beingMoved ? `0 1px 6px ${color}22` : "0 1px 2px rgba(0,0,0,0.04)",
                     transition: "border-color 0.1s, background 0.1s",
                     userSelect: "none",
                   }}
                 >
-                  {rank != null && (
+                  {selectMode && (
+                    <div style={{
+                      width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+                      border: isSelected ? "2px solid #c0392b" : "2px solid #ccc",
+                      background: isSelected ? "#c0392b" : "#fff",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                    }}>
+                      {isSelected && <span style={{ color: "#fff", fontSize: 10, lineHeight: 1 }}>✓</span>}
+                    </div>
+                  )}
+                  {rank != null && !selectMode && (
                     <span style={{ color: "#bbb", fontSize: 10, fontFamily: "'Space Mono', monospace", width: 22, flexShrink: 0, textAlign: "right" }}>
                       #{rank}
                     </span>
                   )}
-                  <span style={{ flex: 1, color: beingMoved ? color : "#2a2018", fontSize: 14, fontFamily: "'Playfair Display', serif", fontWeight: 400, letterSpacing: 0.2 }}>
+                  <span style={{ flex: 1, color: isSelected ? "#8a2a2a" : beingMoved ? color : "#2a2018", fontSize: 14, fontFamily: "'Playfair Display', serif", fontWeight: 400, letterSpacing: 0.2 }}>
                     {name}
                   </span>
                   {plays > 0 && (
@@ -250,13 +287,15 @@ export default function App() {
                       {plays}×
                     </span>
                   )}
-                  <button onClick={(e) => deleteGame(bucket, i, e)}
-                    style={{ background: "none", border: "none", color: "#ddd", cursor: "pointer", fontSize: 16, padding: "0 2px", lineHeight: 1, flexShrink: 0 }}
-                    onMouseEnter={(e) => (e.currentTarget.style.color = "#c0392b")}
-                    onMouseLeave={(e) => (e.currentTarget.style.color = "#ddd")}
-                  >×</button>
+                  {!selectMode && (
+                    <button onClick={(e) => deleteGame(bucket, i, e)}
+                      style={{ background: "none", border: "none", color: "#ddd", cursor: "pointer", fontSize: 16, padding: "0 2px", lineHeight: 1, flexShrink: 0 }}
+                      onMouseEnter={(e) => (e.currentTarget.style.color = "#c0392b")}
+                      onMouseLeave={(e) => (e.currentTarget.style.color = "#ddd")}
+                    >×</button>
+                  )}
                 </div>
-                {held && !(held.bucket === bucket && held.idx === i) && (
+                {held && !selectMode && !(held.bucket === bucket && held.idx === i) && (
                   <InsertSlot onClick={() => handleSlotTap(bucket, i + 1)} color={color} />
                 )}
                 {dragOver?.bucket === bucket && dragOver.insertBefore === i + 1 && <DropLine color={color} />}
@@ -264,7 +303,7 @@ export default function App() {
             );
           })}
 
-          {isEmpty && held && (
+          {isEmpty && held && !selectMode && (
             <div onClick={() => handleSlotTap(bucket, null)}
               style={{ color: color + "88", fontSize: 11, fontFamily: "'Space Mono', monospace", padding: "7px 12px", cursor: "pointer", letterSpacing: 1 }}>
               drop here
@@ -285,7 +324,6 @@ export default function App() {
         input::placeholder { color: #bbb; }
       `}</style>
 
-      {/* Header */}
       <div style={{ padding: "18px 16px 14px", background: "#fff", borderBottom: "2px solid #e8e0d0", position: "sticky", top: 0, zIndex: 50, boxShadow: "0 2px 8px rgba(0,0,0,0.06)" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
           <div style={{ fontFamily: "'Playfair Display', serif", color: "#2a2018", fontSize: 22, fontWeight: 700, letterSpacing: 0.5 }}>
@@ -296,20 +334,32 @@ export default function App() {
               </span>
             )}
           </div>
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            style={{
-              background: "#f5f0e8", border: "1px solid #d0c8b8",
-              borderRadius: 8, color: "#8a7a5a", padding: "6px 12px",
-              cursor: "pointer", fontFamily: "'Space Mono', monospace",
-              fontSize: 11, letterSpacing: 0.5,
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = "#ede8de"; e.currentTarget.style.borderColor = "#b8a888"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "#f5f0e8"; e.currentTarget.style.borderColor = "#d0c8b8"; }}
-          >
-            BGG CSV
-          </button>
-          <input ref={fileInputRef} type="file" accept=".csv" onChange={handleCSVImport} style={{ display: "none" }} />
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={toggleSelectMode}
+              style={{
+                background: selectMode ? "#ffeef0" : "#f5f0e8",
+                border: `1px solid ${selectMode ? "#e08090" : "#d0c8b8"}`,
+                borderRadius: 8, color: selectMode ? "#c0392b" : "#8a7a5a",
+                padding: "6px 12px", cursor: "pointer",
+                fontFamily: "'Space Mono', monospace", fontSize: 11, letterSpacing: 0.5,
+              }}
+            >
+              {selectMode ? "CANCEL" : "SELECT"}
+            </button>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                background: "#f5f0e8", border: "1px solid #d0c8b8",
+                borderRadius: 8, color: "#8a7a5a", padding: "6px 12px",
+                cursor: "pointer", fontFamily: "'Space Mono', monospace",
+                fontSize: 11, letterSpacing: 0.5,
+              }}
+            >
+              BGG CSV
+            </button>
+            <input ref={fileInputRef} type="file" accept=".csv" onChange={handleCSVImport} style={{ display: "none" }} />
+          </div>
         </div>
 
         {importMessage && (
@@ -324,30 +374,47 @@ export default function App() {
           </div>
         )}
 
-        <div style={{ display: "flex", gap: 8 }}>
-          <input
-            value={input} onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && addGame()}
-            placeholder="Add a game manually…"
+        {!selectMode && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              value={input} onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addGame()}
+              placeholder="Add a game manually…"
+              style={{
+                flex: 1, background: "#faf8f4", border: "1px solid #d8d0c0",
+                borderRadius: 8, color: "#2a2018", padding: "9px 12px",
+                fontSize: 14, fontFamily: "'Playfair Display', serif",
+              }}
+            />
+            <button onClick={addGame} style={{
+              background: "#8a7a5a", border: "none", borderRadius: 8,
+              color: "#fff", fontWeight: 700, padding: "0 16px",
+              cursor: "pointer", fontFamily: "'Space Mono', monospace", fontSize: 11, letterSpacing: 0.5,
+            }}>ADD</button>
+          </div>
+        )}
+
+        {selectMode && selected.size > 0 && (
+          <button
+            onClick={deleteSelected}
             style={{
-              flex: 1, background: "#faf8f4", border: "1px solid #d8d0c0",
-              borderRadius: 8, color: "#2a2018", padding: "9px 12px",
-              fontSize: 14, fontFamily: "'Playfair Display', serif",
+              width: "100%", padding: "10px", background: "#c0392b", border: "none",
+              borderRadius: 8, color: "#fff", fontWeight: 700,
+              cursor: "pointer", fontFamily: "'Space Mono', monospace", fontSize: 12, letterSpacing: 0.5,
             }}
-          />
-          <button onClick={addGame} style={{
-            background: "#8a7a5a", border: "none", borderRadius: 8,
-            color: "#fff", fontWeight: 700, padding: "0 16px",
-            cursor: "pointer", fontFamily: "'Space Mono', monospace", fontSize: 11, letterSpacing: 0.5,
-          }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = "#6a5a3a")}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "#8a7a5a")}
-          >ADD</button>
-        </div>
+          >
+            DELETE {selected.size} GAME{selected.size !== 1 ? "S" : ""}
+          </button>
+        )}
+
+        {selectMode && selected.size === 0 && (
+          <div style={{ color: "#aaa", fontSize: 12, fontFamily: "'Space Mono', monospace", padding: "8px 0", letterSpacing: 0.5 }}>
+            Tap games to select them
+          </div>
+        )}
       </div>
 
-      {/* Moving banner */}
-      {held && (
+      {held && !selectMode && (
         <div style={{
           position: "sticky", top: 85, zIndex: 40,
           background: "#fffbf0", borderBottom: "1px solid #e8d898",
