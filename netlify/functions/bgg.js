@@ -9,7 +9,8 @@ export const handler = async (event) => {
   const response = await fetch(bggUrl, {
     headers: {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-      "Accept": "application/xml"
+      "Accept": "application/xml",
+      "Cookie": "SessionID=45c9fb9c60e2d3acf8cd1e5404f62af4397e8473u3675141"
     }
   });
 
@@ -18,6 +19,6 @@ export const handler = async (event) => {
   return {
     statusCode: 200,
     headers: { "Content-Type": "text/plain", "Access-Control-Allow-Origin": "*" },
-    body: `STATUS: ${response.status}\nLENGTH: ${xml.length}\nBODY: ${xml.slice(0, 500)}`
+    body: `STATUS: ${response.status}\nLENGTH: ${xml.length}\nBODY: ${xml.slice(0, 1000)}`
   };
 };
