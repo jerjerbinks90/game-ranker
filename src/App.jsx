@@ -25,19 +25,26 @@ const scoreBg = (s) => {
   return "#f5f5f5";
 };
 
+// Parses the custom format: Title (year), Plays: N
 function parseCSV(text) {
-  const lines = text.trim().split("\n");
+  const lines = text.trim().split(/\r?\n/);
   if (lines.length < 2) return [];
-  const headers = lines[0].split(",").map(h => h.replace(/^"|"$/g, "").trim().toLowerCase());
-  const nameIdx = headers.findIndex(h => h === "objectname" || h === "game name" || h === "name");
-  const playsIdx = headers.findIndex(h => h === "numplays" || h === "plays" || h === "number of plays");
-  if (nameIdx === -1) return [];
+  // Skip header row
   const games = [];
   for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].match(/(".*?"|[^",]+)(?=\s*,|\s*$)/g) || [];
-    const name = cols[nameIdx]?.replace(/^"|"$/g, "").trim();
-    const plays = playsIdx !== -1 ? parseInt(cols[playsIdx]?.replace(/^"|"$/g, "").trim()) || 0 : 0;
-    if (name && plays > 0) games.push({ name, plays });
+    const line = lines[i].trim();
+    if (!line) continue;
+    // Split on last comma to handle titles with commas
+    const lastComma = line.lastIndexOf(",");
+    if (lastComma === -1) continue;
+    let title = line.slice(0, lastComma).replace(/^"|"$/g, "").trim();
+    const playsRaw = line.slice(lastComma + 1).replace(/^"|"$/g, "").trim();
+    // Strip year from title e.g. "Wingspan (2019)" -> "Wingspan"
+    title = title.replace(/\s*\(\d{4}\)\s*$/, "").trim();
+    // Parse "Plays: N"
+    const playsMatch = playsRaw.match(/(\d+)/);
+    const plays = playsMatch ? parseInt(playsMatch[1]) : 0;
+    if (title && plays > 0) games.push({ name: title, plays });
   }
   return games;
 }
@@ -66,9 +73,13 @@ export default function App() {
   const [importMessage, setImportMessage] = useState("");
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState(new Set());
+  const [showSync, setShowSync] = useState(false);
+  const [syncImportText, setSyncImportText] = useState("");
+  const [syncMessage, setSyncMessage] = useState("");
   const drag = useRef(null);
   const [dragOver, setDragOver] = useState(null);
   const fileInputRef = useRef(null);
+  const syncTextRef = useRef(null);
 
   useEffect(() => {
     const { buckets: b, unranked: u, playCounts: p } = loadState();
@@ -101,13 +112,13 @@ export default function App() {
         const games = parseCSV(evt.target.result);
         if (games.length === 0) {
           setImportStatus("error");
-          setImportMessage("No played games found in CSV. Make sure it's a BGG collection export and you have logged plays.");
+          setImportMessage("No played games found. Make sure this is the correct format (Title, Plays: N).");
           return;
         }
         const allRanked = Object.values(buckets).flat();
         const existing = new Set([...unranked, ...allRanked]);
         const newPlayCounts = { ...playCounts };
-        games.forEach(({ name, plays }) => { if (plays > 0) newPlayCounts[name] = plays; });
+        games.forEach(({ name, plays }) => { newPlayCounts[name] = plays; });
         const newGames = games.filter(({ name }) => !existing.has(name)).map(g => g.name);
         commit(buckets, [...newGames, ...unranked], newPlayCounts);
         setImportStatus("success");
@@ -116,11 +127,32 @@ export default function App() {
         setTimeout(() => { setImportStatus(null); setImportMessage(""); }, 4000);
       } catch {
         setImportStatus("error");
-        setImportMessage("Failed to parse CSV. Try re-exporting from BGG.");
+        setImportMessage("Failed to parse CSV. Check the file format.");
       }
     };
     reader.readAsText(file);
     e.target.value = "";
+  };
+
+  // Export: encode full state as base64
+  const handleExport = () => {
+    const data = JSON.stringify({ buckets, unranked, playCounts });
+    const encoded = btoa(unescape(encodeURIComponent(data)));
+    setSyncImportText(encoded);
+    setTimeout(() => syncTextRef.current?.select(), 50);
+  };
+
+  // Import: decode base64 and restore state
+  const handleSyncImport = () => {
+    try {
+      const decoded = decodeURIComponent(escape(atob(syncImportText.trim())));
+      const { buckets: b, unranked: u, playCounts: p } = JSON.parse(decoded);
+      commit(b || {}, u || [], p || {});
+      setSyncMessage("Synced successfully!");
+      setTimeout(() => { setSyncMessage(""); setShowSync(false); setSyncImportText(""); }, 2500);
+    } catch {
+      setSyncMessage("Invalid code. Copy it again from your other device.");
+    }
   };
 
   const toggleSelectMode = () => {
@@ -229,7 +261,7 @@ export default function App() {
         </div>
 
         <div
-          style={{ flex: 1, padding: isEmpty ? "0" : "2px 4px", background: isEmpty ? "#faf8f4" : bg, transition: "background 0.15s" }}
+          style={{ flex: 1, padding: isEmpty ? "0" : "2px 4px", background: isEmpty ? "#faf8f4" : bg }}
           onDragOver={(e) => { if (isEmpty) onDragOver(e, bucket, null); }}
           onDrop={(e) => { if (isEmpty) onDrop(e, bucket, null); }}
         >
@@ -259,7 +291,7 @@ export default function App() {
                     borderRadius: 6,
                     cursor: selectMode ? "pointer" : beingMoved ? "grabbing" : held ? "pointer" : "grab",
                     opacity: isDragging ? 0.4 : 1,
-                    boxShadow: beingMoved ? `0 1px 6px ${color}22` : "0 1px 2px rgba(0,0,0,0.04)",
+                    boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
                     transition: "border-color 0.1s, background 0.1s",
                     userSelect: "none",
                   }}
@@ -321,7 +353,9 @@ export default function App() {
         * { box-sizing: border-box; margin: 0; padding: 0; }
         button:focus { outline: none; }
         input:focus { outline: none; }
+        textarea:focus { outline: none; }
         input::placeholder { color: #bbb; }
+        textarea::placeholder { color: #bbb; }
       `}</style>
 
       <div style={{ padding: "18px 16px 14px", background: "#fff", borderBottom: "2px solid #e8e0d0", position: "sticky", top: 0, zIndex: 50, boxShadow: "0 2px 8px rgba(0,0,0,0.06)" }}>
@@ -334,29 +368,31 @@ export default function App() {
               </span>
             )}
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              onClick={toggleSelectMode}
-              style={{
-                background: selectMode ? "#ffeef0" : "#f5f0e8",
-                border: `1px solid ${selectMode ? "#e08090" : "#d0c8b8"}`,
-                borderRadius: 8, color: selectMode ? "#c0392b" : "#8a7a5a",
-                padding: "6px 12px", cursor: "pointer",
-                fontFamily: "'Space Mono', monospace", fontSize: 11, letterSpacing: 0.5,
-              }}
-            >
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={toggleSelectMode} style={{
+              background: selectMode ? "#ffeef0" : "#f5f0e8",
+              border: `1px solid ${selectMode ? "#e08090" : "#d0c8b8"}`,
+              borderRadius: 8, color: selectMode ? "#c0392b" : "#8a7a5a",
+              padding: "6px 10px", cursor: "pointer",
+              fontFamily: "'Space Mono', monospace", fontSize: 11, letterSpacing: 0.5,
+            }}>
               {selectMode ? "CANCEL" : "SELECT"}
             </button>
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              style={{
-                background: "#f5f0e8", border: "1px solid #d0c8b8",
-                borderRadius: 8, color: "#8a7a5a", padding: "6px 12px",
-                cursor: "pointer", fontFamily: "'Space Mono', monospace",
-                fontSize: 11, letterSpacing: 0.5,
-              }}
-            >
-              BGG CSV
+            <button onClick={() => fileInputRef.current?.click()} style={{
+              background: "#f5f0e8", border: "1px solid #d0c8b8",
+              borderRadius: 8, color: "#8a7a5a", padding: "6px 10px",
+              cursor: "pointer", fontFamily: "'Space Mono', monospace", fontSize: 11, letterSpacing: 0.5,
+            }}>
+              CSV
+            </button>
+            <button onClick={() => { setShowSync(!showSync); setSyncMessage(""); setSyncImportText(""); }} style={{
+              background: showSync ? "#edf3f7" : "#f5f0e8",
+              border: `1px solid ${showSync ? "#a0b8d0" : "#d0c8b8"}`,
+              borderRadius: 8, color: showSync ? "#2a6080" : "#8a7a5a",
+              padding: "6px 10px", cursor: "pointer",
+              fontFamily: "'Space Mono', monospace", fontSize: 11, letterSpacing: 0.5,
+            }}>
+              SYNC
             </button>
             <input ref={fileInputRef} type="file" accept=".csv" onChange={handleCSVImport} style={{ display: "none" }} />
           </div>
@@ -374,7 +410,44 @@ export default function App() {
           </div>
         )}
 
-        {!selectMode && (
+        {/* Sync panel */}
+        {showSync && (
+          <div style={{ marginBottom: 10, padding: "12px", background: "#edf3f7", border: "1px solid #a0b8d0", borderRadius: 8 }}>
+            <div style={{ fontSize: 11, fontFamily: "'Space Mono', monospace", color: "#2a6080", marginBottom: 8, letterSpacing: 0.5 }}>SYNC ACROSS DEVICES</div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+              <button onClick={handleExport} style={{
+                flex: 1, padding: "8px", background: "#2a6080", border: "none",
+                borderRadius: 6, color: "#fff", cursor: "pointer",
+                fontFamily: "'Space Mono', monospace", fontSize: 11, letterSpacing: 0.5,
+              }}>EXPORT CODE</button>
+              <button onClick={handleSyncImport} disabled={!syncImportText.trim()} style={{
+                flex: 1, padding: "8px", background: syncImportText.trim() ? "#4a7c3f" : "#ccc",
+                border: "none", borderRadius: 6, color: "#fff",
+                cursor: syncImportText.trim() ? "pointer" : "default",
+                fontFamily: "'Space Mono', monospace", fontSize: 11, letterSpacing: 0.5,
+              }}>IMPORT CODE</button>
+            </div>
+            <textarea
+              ref={syncTextRef}
+              value={syncImportText}
+              onChange={(e) => setSyncImportText(e.target.value)}
+              placeholder="Export generates a code here. To sync another device, paste that code here and hit Import."
+              style={{
+                width: "100%", height: 72, background: "#fff", border: "1px solid #a0b8d0",
+                borderRadius: 6, padding: "8px", fontSize: 11,
+                fontFamily: "'Space Mono', monospace", color: "#2a2018",
+                resize: "none", lineHeight: 1.4,
+              }}
+            />
+            {syncMessage && (
+              <div style={{ marginTop: 6, fontSize: 11, fontFamily: "'Space Mono', monospace", color: syncMessage.includes("success") ? "#2a6a3a" : "#8a2a2a" }}>
+                {syncMessage}
+              </div>
+            )}
+          </div>
+        )}
+
+        {!selectMode && !showSync && (
           <div style={{ display: "flex", gap: 8 }}>
             <input
               value={input} onChange={(e) => setInput(e.target.value)}
@@ -395,14 +468,11 @@ export default function App() {
         )}
 
         {selectMode && selected.size > 0 && (
-          <button
-            onClick={deleteSelected}
-            style={{
-              width: "100%", padding: "10px", background: "#c0392b", border: "none",
-              borderRadius: 8, color: "#fff", fontWeight: 700,
-              cursor: "pointer", fontFamily: "'Space Mono', monospace", fontSize: 12, letterSpacing: 0.5,
-            }}
-          >
+          <button onClick={deleteSelected} style={{
+            width: "100%", padding: "10px", background: "#c0392b", border: "none",
+            borderRadius: 8, color: "#fff", fontWeight: 700,
+            cursor: "pointer", fontFamily: "'Space Mono', monospace", fontSize: 12, letterSpacing: 0.5,
+          }}>
             DELETE {selected.size} GAME{selected.size !== 1 ? "S" : ""}
           </button>
         )}
@@ -435,9 +505,7 @@ export default function App() {
 
       <div style={{ paddingBottom: 60 }}>
         {(unranked.length > 0 || (held && held.bucket !== "unranked")) && (
-          <div style={{ marginBottom: 0 }}>
-            {renderBucket("unranked", "?", "#888", true)}
-          </div>
+          <div>{renderBucket("unranked", "?", "#888", true)}</div>
         )}
         {SCORES.map((score) => renderBucket(score, score.toFixed(1), scoreColor(score)))}
       </div>
