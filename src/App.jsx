@@ -307,7 +307,7 @@ export default function App() {
                     </div>
                   )}
                   {rank != null && !selectMode && (
-                    <span style={{ color: "#bbb", fontSize: 10, fontFamily: "'Space Mono', monospace", width: 22, flexShrink: 0, textAlign: "right" }}>
+                    <span style={{ color: color, fontSize: 13, fontWeight: 700, fontFamily: "'Space Mono', monospace", minWidth: 32, flexShrink: 0, textAlign: "right" }}>
                       #{rank}
                     </span>
                   )}
@@ -315,7 +315,12 @@ export default function App() {
                     {name}
                   </span>
                   {plays > 0 && (
-                    <span style={{ fontSize: 10, fontFamily: "'Space Mono', monospace", color: "#bbb", flexShrink: 0 }}>
+                    <span style={{
+                      fontSize: 11, fontWeight: 700, fontFamily: "'Space Mono', monospace",
+                      color: "#5a4a3a", flexShrink: 0,
+                      background: "#f0ebe0", border: "1px solid #d8d0c0",
+                      borderRadius: 10, padding: "2px 7px",
+                    }}>
                       {plays}×
                     </span>
                   )}
