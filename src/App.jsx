@@ -264,6 +264,7 @@ export default function App() {
           style={{ flex: 1, padding: isEmpty ? "0" : "2px 4px", background: isEmpty ? "#faf8f4" : bg }}
           onDragOver={(e) => { if (isEmpty) onDragOver(e, bucket, null); }}
           onDrop={(e) => { if (isEmpty) onDrop(e, bucket, null); }}
+          onClick={(e) => { if (held && !selectMode && e.target === e.currentTarget) setHeld(null); }}
         >
           {held && !selectMode && <InsertSlot onClick={() => handleSlotTap(bucket, 0)} color={color} />}
           {dragOver?.bucket === bucket && dragOver.insertBefore === 0 && <DropLine color={color} />}
@@ -492,23 +493,26 @@ export default function App() {
       {held && !selectMode && (
         <div style={{
           position: "sticky", top: 85, zIndex: 40,
-          background: "#fffbf0", borderBottom: "1px solid #e8d898",
-          padding: "8px 16px", display: "flex", alignItems: "center", gap: 10,
-          boxShadow: "0 2px 6px rgba(0,0,0,0.06)",
+          background: "#fffbf0", borderBottom: "2px solid #e8d898",
+          padding: "10px 16px", display: "flex", alignItems: "center", gap: 10,
+          boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
         }}>
-          <span style={{ color: "#8a7a2a", fontSize: 10, fontFamily: "'Space Mono', monospace", flexShrink: 0 }}>MOVING</span>
+          <span style={{ color: "#8a7a2a", fontSize: 11, fontWeight: 700, fontFamily: "'Space Mono', monospace", flexShrink: 0, background: "#f5edc8", padding: "3px 8px", borderRadius: 4 }}>MOVING</span>
           <span style={{ color: "#2a2018", fontSize: 14, fontFamily: "'Playfair Display', serif", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {held.name}
           </span>
           <button onClick={() => setHeld(null)} style={{
-            background: "#f5f0e8", border: "1px solid #d8c878",
-            color: "#8a7a2a", borderRadius: 6, padding: "3px 10px",
-            cursor: "pointer", fontSize: 11, fontFamily: "'Space Mono', monospace",
-          }}>CANCEL</button>
+            background: "#c0392b", border: "none",
+            color: "#fff", borderRadius: 6, padding: "7px 16px",
+            cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "'Space Mono', monospace",
+            letterSpacing: 0.5,
+          }}>✕ CANCEL</button>
         </div>
       )}
 
-      <div style={{ paddingBottom: 60 }}>
+      <div style={{ paddingBottom: 60 }} onClick={(e) => {
+        if (held && !selectMode && e.target === e.currentTarget) setHeld(null);
+      }}>
         {(unranked.length > 0 || (held && held.bucket !== "unranked")) && (
           <div>{renderBucket("unranked", "?", "#888", true)}</div>
         )}
