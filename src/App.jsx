@@ -110,12 +110,14 @@ export default function App() {
   useEffect(() => {
     const handleScroll = () => {
       const hh = headerRef.current ? headerRef.current.getBoundingClientRect().height : 120;
+      // Detect at 1/3 down the visible area so the indicator updates as you read
+      const detectAt = hh + (window.innerHeight - hh) * 0.33;
       let found = null;
       for (const key of SCORES) {
         const el = bucketRefs.current[key];
         if (!el) continue;
         const rect = el.getBoundingClientRect();
-        if (rect.top <= hh && rect.bottom > hh) {
+        if (rect.top <= detectAt && rect.bottom > detectAt) {
           found = key;
           break;
         }
@@ -125,7 +127,7 @@ export default function App() {
           const el = bucketRefs.current[key];
           if (!el) continue;
           const rect = el.getBoundingClientRect();
-          if (rect.top > hh && rect.top < window.innerHeight) {
+          if (rect.top > detectAt && rect.top < window.innerHeight) {
             found = key;
             break;
           }
