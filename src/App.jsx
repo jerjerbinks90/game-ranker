@@ -97,19 +97,33 @@ export default function App() {
   // Sticky bucket indicator: track which bucket is near the top of the viewport
   useEffect(() => {
     const handleScroll = () => {
-      let closest = null;
-      let closestDist = Infinity;
-      Object.entries(bucketRefs.current).forEach(([key, el]) => {
-        if (!el || key === "unranked") return;
+      const headerBottom = 120;
+      let found = null;
+      // Walk through score buckets in order, find the one spanning the header line
+      const allBuckets = SCORES;
+      for (const key of allBuckets) {
+        const el = bucketRefs.current[key];
+        if (!el) continue;
         const rect = el.getBoundingClientRect();
-        // Find the bucket whose top is closest to (but not far below) the header
-        const dist = Math.abs(rect.top - 120);
-        if (rect.top < window.innerHeight && rect.bottom > 120 && dist < closestDist) {
-          closestDist = dist;
-          closest = key;
+        // This bucket spans the area just below the header
+        if (rect.top <= headerBottom && rect.bottom > headerBottom) {
+          found = key;
+          break;
         }
-      });
-      setCurrentBucket(closest);
+      }
+      // If nothing spans the header, find the first bucket below it
+      if (!found) {
+        for (const key of allBuckets) {
+          const el = bucketRefs.current[key];
+          if (!el) continue;
+          const rect = el.getBoundingClientRect();
+          if (rect.top > headerBottom && rect.top < window.innerHeight) {
+            found = key;
+            break;
+          }
+        }
+      }
+      setCurrentBucket(found);
     };
     window.addEventListener("scroll", handleScroll, { passive: true });
     handleScroll();
