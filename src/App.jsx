@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 const SCORES = Array.from({ length: 21 }, (_, i) => +(10 - i * 0.5).toFixed(1));
 const STORAGE_KEY = "game-ranker-v2";
@@ -103,6 +103,8 @@ export default function App() {
   const headerRef = useRef(null);
   const [headerHeight, setHeaderHeight] = useState(120);
 
+  const needsSortSet = useMemo(() => new Set(needsSort), [needsSort]);
+
   useEffect(() => {
     const { buckets: b, unranked: u, playCounts: p, bggIds: ids, needsSort: ns } = loadState();
     setBuckets(b);
@@ -122,25 +124,31 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let ticking = false;
     const handleScroll = () => {
-      const hh = headerRef.current ? headerRef.current.getBoundingClientRect().height : 120;
-      const detectAt = hh + (window.innerHeight - hh) * 0.33;
-      let found = null;
-      for (const key of SCORES) {
-        const el = bucketRefs.current[key];
-        if (!el) continue;
-        const rect = el.getBoundingClientRect();
-        if (rect.top <= detectAt && rect.bottom > detectAt) { found = key; break; }
-      }
-      if (!found) {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(() => {
+        const hh = headerRef.current ? headerRef.current.getBoundingClientRect().height : 120;
+        const detectAt = hh + (window.innerHeight - hh) * 0.33;
+        let found = null;
         for (const key of SCORES) {
           const el = bucketRefs.current[key];
           if (!el) continue;
           const rect = el.getBoundingClientRect();
-          if (rect.top > detectAt && rect.top < window.innerHeight) { found = key; break; }
+          if (rect.top <= detectAt && rect.bottom > detectAt) { found = key; break; }
         }
-      }
-      setCurrentBucket(found);
+        if (!found) {
+          for (const key of SCORES) {
+            const el = bucketRefs.current[key];
+            if (!el) continue;
+            const rect = el.getBoundingClientRect();
+            if (rect.top > detectAt && rect.top < window.innerHeight) { found = key; break; }
+          }
+        }
+        setCurrentBucket(found);
+        ticking = false;
+      });
     };
     window.addEventListener("scroll", handleScroll, { passive: true });
     handleScroll();
@@ -469,7 +477,7 @@ export default function App() {
             const isDragging = drag.current?.bucket === bucket && drag.current?.idx === i;
             const plays = playCounts[name];
             const isSelected = selected.has(name);
-            const isNew = needsSort.includes(name);
+            const isNew = needsSortSet.has(name);
 
             return (
               <div key={`${name}-${i}`}>
@@ -727,7 +735,7 @@ export default function App() {
 
       {held && !selectMode && (
         <div style={{
-          position: "sticky", top: 85, zIndex: 40,
+          position: "fixed", top: headerHeight, left: 0, right: 0, zIndex: 40,
           background: "#fffbf0", borderBottom: "2px solid #e8d898",
           padding: "10px 16px", display: "flex", alignItems: "center", gap: 10,
           boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
