@@ -46,21 +46,32 @@ function normalizeName(name) {
 function fuzzyFindMatch(bggName, existingNames) {
   const bggLower = bggName.toLowerCase();
   const bggNorm = normalizeName(bggName);
+  const bggWords = new Set(bggNorm.split(/\s+/).filter(w => w.length > 0));
 
   // Exact match
   if (existingNames[bggLower]) return existingNames[bggLower];
 
-  // Normalized match + substring match
   let bestMatch = null;
   let bestScore = 0;
 
   for (const [key, originalName] of Object.entries(existingNames)) {
     const existNorm = normalizeName(key);
+    if (!existNorm) continue;
 
     // Normalized exact match
-    if (existNorm === bggNorm && existNorm.length > 0) return originalName;
+    if (existNorm === bggNorm) return originalName;
 
-    // Substring: one contains the other (min 4 chars to avoid false positives)
+    const existWords = new Set(existNorm.split(/\s+/).filter(w => w.length > 0));
+
+    // All words from shorter name appear in longer name
+    const [smaller, larger] = existWords.size <= bggWords.size ? [existWords, bggWords] : [bggWords, existWords];
+    const allContained = [...smaller].every(w => [...larger].some(lw => lw.includes(w) || w.includes(lw)));
+    if (allContained && smaller.size >= 1 && smaller.size > 0) {
+      const score = smaller.size / larger.size;
+      if (score > bestScore) { bestScore = score; bestMatch = originalName; }
+    }
+
+    // Substring: one contains the other (min 4 chars)
     if (existNorm.length >= 4 && bggNorm.length >= 4) {
       if (bggNorm.includes(existNorm) || existNorm.includes(bggNorm)) {
         const score = Math.min(existNorm.length, bggNorm.length) / Math.max(existNorm.length, bggNorm.length);
@@ -69,8 +80,7 @@ function fuzzyFindMatch(bggName, existingNames) {
     }
   }
 
-  // Only accept substring matches with reasonable overlap
-  if (bestMatch && bestScore > 0.3) return bestMatch;
+  if (bestMatch && bestScore > 0.2) return bestMatch;
   return null;
 }
 
@@ -310,6 +320,7 @@ export default function App() {
     let added = 0;
     let updated = 0;
     let linked = 0;
+    let unmatched = [];
 
     bggGames.forEach(({ id, name: bggName, plays, rating }) => {
       // Try to find existing game: first by BGG ID, then by name (fuzzy)
@@ -336,6 +347,7 @@ export default function App() {
           newU = [...newU, bggName];
         }
         added++;
+        unmatched.push(bggName);
 
         // Register in lookup so duplicates within BGG response are caught
         existingByName[bggName.toLowerCase()] = bggName;
@@ -354,7 +366,11 @@ export default function App() {
     if (added > 0) parts.push(`${added} new game${added !== 1 ? "s" : ""} added`);
     if (updated > 0) parts.push(`${updated} play count${updated !== 1 ? "s" : ""} updated`);
     if (linked > 0) parts.push(`${linked} game${linked !== 1 ? "s" : ""} linked to BGG`);
-    setImportMessage(parts.join(", ") + ".");
+    let msg = parts.length > 0 ? parts.join(", ") + "." : "Everything up to date.";
+    if (unmatched.length > 0 && unmatched.length <= 10) {
+      msg += " New: " + unmatched.join(", ");
+    }
+    setImportMessage(msg);
     setBggSyncing(false);
     setTimeout(() => { setImportStatus(null); setImportMessage(""); }, 5000);
   };
