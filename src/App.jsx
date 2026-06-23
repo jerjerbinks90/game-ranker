@@ -372,7 +372,6 @@ export default function App() {
     }
     setImportMessage(msg);
     setBggSyncing(false);
-    setTimeout(() => { setImportStatus(null); setImportMessage(""); }, 5000);
   };
 
   const handleBggSync = () => {
@@ -735,14 +734,16 @@ export default function App() {
         )}
 
         {importMessage && (
-          <div style={{
+          <div onClick={() => { setImportStatus(null); setImportMessage(""); }} style={{
             marginBottom: 10, padding: "8px 12px",
             background: importStatus === "error" ? "#fdf0f0" : importStatus === "success" ? "#f0fdf4" : "#fdfaf0",
             border: `1px solid ${importStatus === "error" ? "#e0a0a0" : importStatus === "success" ? "#a0d0b0" : "#d0c080"}`,
             borderRadius: 8, fontSize: 12, fontFamily: "'Space Mono', monospace", lineHeight: 1.6,
             color: importStatus === "error" ? "#8a2a2a" : importStatus === "success" ? "#2a6a3a" : "#6a5a2a",
+            cursor: "pointer",
           }}>
             {importMessage}
+            <span style={{ float: "right", opacity: 0.5, fontSize: 10 }}>tap to dismiss</span>
           </div>
         )}
 
