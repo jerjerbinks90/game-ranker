@@ -316,10 +316,7 @@ export default function App() {
           onDragOver={(e) => onDragOver(e, bucket, null)}
           onDrop={(e) => onDrop(e, bucket, null)}
           style={{
-            width: 62, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
-            fontFamily: "'Playfair Display', serif", fontWeight: 700,
-            fontSize: isUnrankedBucket ? 18 : 16,
-            color: isEmpty && !held ? "#ccc" : color,
+            width: 62, flexShrink: 0, display: "flex", alignItems: "flex-start", justifyContent: "center",
             borderRight: `2px solid ${isEmpty && !held ? "#e8e0d0" : color + "55"}`,
             background: isEmpty && !held ? "#faf8f4" : bg,
             cursor: held && !selectMode ? "pointer" : "default",
@@ -327,7 +324,15 @@ export default function App() {
             userSelect: "none",
           }}
         >
-          {label}
+          <div style={{
+            position: "sticky", top: headerHeight + 2,
+            fontFamily: "'Playfair Display', serif", fontWeight: 700,
+            fontSize: isUnrankedBucket ? 18 : 16,
+            color: isEmpty && !held ? "#ccc" : color,
+            padding: "6px 0",
+          }}>
+            {label}
+          </div>
         </div>
 
         <div
@@ -583,25 +588,6 @@ export default function App() {
       <div style={{ paddingBottom: 60 }} onClick={(e) => {
         if (held && !selectMode && e.target === e.currentTarget) setHeld(null);
       }}>
-        {/* Sticky bucket indicator - fixed bar below header */}
-        {currentBucket && currentBucket !== "unranked" && (
-          <div style={{
-            position: "fixed", top: headerHeight, left: 0, right: 0, zIndex: 49,
-            background: scoreBg(parseFloat(currentBucket)),
-            borderBottom: `2px solid ${scoreColor(parseFloat(currentBucket))}`,
-            padding: "3px 16px",
-            display: "flex", alignItems: "center",
-            transition: "background 0.15s, border-color 0.15s",
-          }}>
-            <span style={{
-              fontFamily: "'Playfair Display', serif", fontWeight: 700,
-              fontSize: 13, color: scoreColor(parseFloat(currentBucket)),
-            }}>
-              {parseFloat(currentBucket).toFixed(1)}
-            </span>
-          </div>
-        )}
-
         {(unranked.length > 0 || (held && held.bucket !== "unranked")) && (
           <div>{renderBucket("unranked", "?", "#888", true)}</div>
         )}
