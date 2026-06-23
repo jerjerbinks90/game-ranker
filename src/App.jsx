@@ -582,12 +582,12 @@ export default function App() {
       {/* Sticky bucket indicator */}
       {currentBucket && currentBucket !== "unranked" && !showAddOverlay && (
         <div style={{
-          position: "fixed", top: 90, right: 16, zIndex: 45,
+          position: "fixed", top: 12, left: "50%", transform: "translateX(-50%)", zIndex: 55,
           background: scoreColor(parseFloat(currentBucket)),
           color: "#fff", fontFamily: "'Playfair Display', serif",
-          fontWeight: 700, fontSize: 16, padding: "6px 12px",
-          borderRadius: 8, boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
-          pointerEvents: "none", opacity: 0.9,
+          fontWeight: 700, fontSize: 14, padding: "4px 14px",
+          borderRadius: 20, boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
+          pointerEvents: "none",
         }}>
           {parseFloat(currentBucket).toFixed(1)}
         </div>
