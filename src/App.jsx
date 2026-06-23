@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 
 const SCORES = Array.from({ length: 21 }, (_, i) => +(10 - i * 0.5).toFixed(1));
 const STORAGE_KEY = "game-ranker-v2";
+const BGG_USERNAME_KEY = "game-ranker-bgg-username";
 
 const scoreColor = (s) => {
   if (s >= 9.5) return "#b8860b";
@@ -25,41 +26,49 @@ const scoreBg = (s) => {
   return "#f5f5f5";
 };
 
-// Parses the custom format: Title (year), Plays: N
-function parseCSV(text) {
-  const lines = text.trim().split(/\r?\n/);
-  if (lines.length < 2) return [];
-  // Skip header row
+function roundToHalf(n) {
+  return Math.round(n * 2) / 2;
+}
+
+function parseBGGCollection(xml) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xml, "application/xml");
+  const items = doc.querySelectorAll("item");
   const games = [];
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    // Split on last comma to handle titles with commas
-    const lastComma = line.lastIndexOf(",");
-    if (lastComma === -1) continue;
-    let title = line.slice(0, lastComma).replace(/^"|"$/g, "").trim();
-    const playsRaw = line.slice(lastComma + 1).replace(/^"|"$/g, "").trim();
-    // Strip year from title e.g. "Wingspan (2019)" -> "Wingspan"
-    title = title.replace(/\s*\(\d{4}\)\s*$/, "").trim();
-    // Parse "Plays: N"
-    const playsMatch = playsRaw.match(/(\d+)/);
-    const plays = playsMatch ? parseInt(playsMatch[1]) : 0;
-    if (title && plays > 0) games.push({ name: title, plays });
-  }
+  items.forEach(item => {
+    const id = parseInt(item.getAttribute("objectid"));
+    const name = item.querySelector("name")?.textContent?.trim();
+    const numplays = parseInt(item.querySelector("numplays")?.textContent || "0");
+    const ratingEl = item.querySelector("stats > rating");
+    const ratingVal = ratingEl?.getAttribute("value");
+    const rating = ratingVal && ratingVal !== "N/A" ? parseFloat(ratingVal) : null;
+    if (name && id) {
+      games.push({ id, name, plays: numplays, rating });
+    }
+  });
   return games;
 }
 
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        buckets: parsed.buckets || {},
+        unranked: parsed.unranked || [],
+        playCounts: parsed.playCounts || {},
+        bggIds: parsed.bggIds || {},
+        needsSort: parsed.needsSort || [],
+      };
+    }
   } catch {}
-  return { buckets: {}, unranked: [], playCounts: {} };
+  return { buckets: {}, unranked: [], playCounts: {}, bggIds: {}, needsSort: [] };
 }
 
-function saveState(buckets, unranked, playCounts) {
+function saveState(buckets, unranked, playCounts, bggIds, needsSort) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ buckets, unranked, playCounts }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ buckets, unranked, playCounts, bggIds, needsSort }));
   } catch {}
 }
 
@@ -67,6 +76,8 @@ export default function App() {
   const [buckets, setBuckets] = useState({});
   const [unranked, setUnranked] = useState([]);
   const [playCounts, setPlayCounts] = useState({});
+  const [bggIds, setBggIds] = useState({});
+  const [needsSort, setNeedsSort] = useState([]);
   const [input, setInput] = useState("");
   const [held, setHeld] = useState(null);
   const [importStatus, setImportStatus] = useState(null);
@@ -80,9 +91,12 @@ export default function App() {
   const [addOverlayInput, setAddOverlayInput] = useState("");
   const [addOverlayScore, setAddOverlayScore] = useState(null);
   const [currentBucket, setCurrentBucket] = useState(null);
+  const [bggUsername, setBggUsername] = useState(() => localStorage.getItem(BGG_USERNAME_KEY) || "");
+  const [bggUsernameInput, setBggUsernameInput] = useState("");
+  const [showBggSetup, setShowBggSetup] = useState(false);
+  const [bggSyncing, setBggSyncing] = useState(false);
   const drag = useRef(null);
   const [dragOver, setDragOver] = useState(null);
-  const fileInputRef = useRef(null);
   const syncTextRef = useRef(null);
   const bucketRefs = useRef({});
   const addOverlayInputRef = useRef(null);
@@ -90,13 +104,14 @@ export default function App() {
   const [headerHeight, setHeaderHeight] = useState(120);
 
   useEffect(() => {
-    const { buckets: b, unranked: u, playCounts: p } = loadState();
+    const { buckets: b, unranked: u, playCounts: p, bggIds: ids, needsSort: ns } = loadState();
     setBuckets(b);
     setUnranked(u);
     setPlayCounts(p || {});
+    setBggIds(ids || {});
+    setNeedsSort(ns || []);
   }, []);
 
-  // Measure header height dynamically
   useEffect(() => {
     if (!headerRef.current) return;
     const measure = () => setHeaderHeight(headerRef.current.getBoundingClientRect().height);
@@ -106,31 +121,23 @@ export default function App() {
     return () => observer.disconnect();
   }, []);
 
-  // Sticky bucket indicator: track which bucket is near the top of the viewport
   useEffect(() => {
     const handleScroll = () => {
       const hh = headerRef.current ? headerRef.current.getBoundingClientRect().height : 120;
-      // Detect at 1/3 down the visible area so the indicator updates as you read
       const detectAt = hh + (window.innerHeight - hh) * 0.33;
       let found = null;
       for (const key of SCORES) {
         const el = bucketRefs.current[key];
         if (!el) continue;
         const rect = el.getBoundingClientRect();
-        if (rect.top <= detectAt && rect.bottom > detectAt) {
-          found = key;
-          break;
-        }
+        if (rect.top <= detectAt && rect.bottom > detectAt) { found = key; break; }
       }
       if (!found) {
         for (const key of SCORES) {
           const el = bucketRefs.current[key];
           if (!el) continue;
           const rect = el.getBoundingClientRect();
-          if (rect.top > detectAt && rect.top < window.innerHeight) {
-            found = key;
-            break;
-          }
+          if (rect.top > detectAt && rect.top < window.innerHeight) { found = key; break; }
         }
       }
       setCurrentBucket(found);
@@ -142,9 +149,11 @@ export default function App() {
 
   const setBucketRef = useCallback((bucket) => (el) => { bucketRefs.current[bucket] = el; }, []);
 
-  const commit = (b, u, p) => {
-    setBuckets(b); setUnranked(u); setPlayCounts(p);
-    saveState(b, u, p);
+  const commit = (b, u, p, ids, ns) => {
+    const finalIds = ids ?? bggIds;
+    const finalNs = ns ?? needsSort;
+    setBuckets(b); setUnranked(u); setPlayCounts(p); setBggIds(finalIds); setNeedsSort(finalNs);
+    saveState(b, u, p, finalIds, finalNs);
   };
 
   const addGame = () => {
@@ -171,42 +180,146 @@ export default function App() {
     setShowAddOverlay(false);
   };
 
-  const handleCSVImport = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+  // BGG Sync
+  const syncWithBGG = async (username) => {
+    setBggSyncing(true);
     setImportStatus("loading");
-    setImportMessage("Reading CSV…");
-    const reader = new FileReader();
-    reader.onload = (evt) => {
+    setImportMessage("Fetching your collection from BGG...");
+
+    let xml = null;
+    const maxRetries = 5;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
-        const games = parseCSV(evt.target.result);
-        if (games.length === 0) {
+        const response = await fetch(`/.netlify/functions/bgg?username=${encodeURIComponent(username)}`);
+
+        if (response.status === 202) {
+          setImportMessage(`BGG is preparing your data... (attempt ${attempt + 1}/${maxRetries})`);
+          await new Promise(r => setTimeout(r, 3000));
+          continue;
+        }
+
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(`BGG returned ${response.status}`);
+        }
+
+        xml = await response.text();
+        break;
+      } catch (err) {
+        if (attempt === maxRetries - 1) {
           setImportStatus("error");
-          setImportMessage("No played games found. Make sure this is the correct format (Title, Plays: N).");
+          setImportMessage(`Sync failed: ${err.message}`);
+          setBggSyncing(false);
           return;
         }
-        const allRanked = Object.values(buckets).flat();
-        const existing = new Set([...unranked, ...allRanked]);
-        const newPlayCounts = { ...playCounts };
-        games.forEach(({ name, plays }) => { newPlayCounts[name] = plays; });
-        const newGames = games.filter(({ name }) => !existing.has(name)).map(g => g.name);
-        commit(buckets, [...newGames, ...unranked], newPlayCounts);
-        setImportStatus("success");
-        const skipped = games.length - newGames.length;
-        setImportMessage(`Added ${newGames.length} game${newGames.length !== 1 ? "s" : ""} to unranked.${skipped > 0 ? ` ${skipped} already in your list (play counts updated).` : ""}`);
-        setTimeout(() => { setImportStatus(null); setImportMessage(""); }, 4000);
-      } catch {
-        setImportStatus("error");
-        setImportMessage("Failed to parse CSV. Check the file format.");
       }
-    };
-    reader.readAsText(file);
-    e.target.value = "";
+    }
+
+    if (!xml) {
+      setImportStatus("error");
+      setImportMessage("BGG took too long to respond. Try again in a minute.");
+      setBggSyncing(false);
+      return;
+    }
+
+    const bggGames = parseBGGCollection(xml);
+
+    if (bggGames.length === 0) {
+      setImportStatus("error");
+      setImportMessage("No played games found on BGG.");
+      setBggSyncing(false);
+      return;
+    }
+
+    // Build lookup of existing games (by name, case-insensitive)
+    const existingByName = {};
+    Object.entries(buckets).forEach(([score, games]) => {
+      games.forEach(name => { existingByName[name.toLowerCase()] = name; });
+    });
+    unranked.forEach(name => { existingByName[name.toLowerCase()] = name; });
+
+    // Build reverse lookup of existing BGG IDs
+    const existingByBggId = {};
+    Object.entries(bggIds).forEach(([name, id]) => { existingByBggId[id] = name; });
+
+    let newB = { ...buckets };
+    let newU = [...unranked];
+    let newP = { ...playCounts };
+    let newIds = { ...bggIds };
+    let newNs = [...needsSort];
+
+    let added = 0;
+    let updated = 0;
+    let linked = 0;
+
+    bggGames.forEach(({ id, name: bggName, plays, rating }) => {
+      // Try to find existing game: first by BGG ID, then by name
+      const existingName = existingByBggId[id] || existingByName[bggName.toLowerCase()];
+
+      if (existingName) {
+        // Game exists — update play count, link BGG ID if needed
+        newP[existingName] = Math.max(plays, newP[existingName] || 0);
+        if (!newIds[existingName]) {
+          newIds[existingName] = id;
+          linked++;
+        }
+        updated++;
+      } else {
+        // New game — add to bucket based on rating or unranked
+        newIds[bggName] = id;
+        newP[bggName] = plays;
+
+        if (rating !== null && !isNaN(rating)) {
+          const bucket = roundToHalf(Math.min(10, Math.max(0, rating)));
+          newB[bucket] = [...(newB[bucket] || []), bggName];
+          newNs.push(bggName);
+        } else {
+          newU = [...newU, bggName];
+        }
+        added++;
+
+        // Register in lookup so duplicates within BGG response are caught
+        existingByName[bggName.toLowerCase()] = bggName;
+        existingByBggId[id] = bggName;
+      }
+    });
+
+    commit(newB, newU, newP, newIds, newNs);
+
+    // Save username
+    localStorage.setItem(BGG_USERNAME_KEY, username);
+    setBggUsername(username);
+
+    setImportStatus("success");
+    const parts = [];
+    if (added > 0) parts.push(`${added} new game${added !== 1 ? "s" : ""} added`);
+    if (updated > 0) parts.push(`${updated} play count${updated !== 1 ? "s" : ""} updated`);
+    if (linked > 0) parts.push(`${linked} game${linked !== 1 ? "s" : ""} linked to BGG`);
+    setImportMessage(parts.join(", ") + ".");
+    setBggSyncing(false);
+    setTimeout(() => { setImportStatus(null); setImportMessage(""); }, 5000);
+  };
+
+  const handleBggSync = () => {
+    if (bggUsername) {
+      syncWithBGG(bggUsername);
+    } else {
+      setShowBggSetup(true);
+      setBggUsernameInput("");
+    }
+  };
+
+  const handleBggUsernameSubmit = () => {
+    const u = bggUsernameInput.trim();
+    if (!u) return;
+    setShowBggSetup(false);
+    syncWithBGG(u);
   };
 
   // Export: encode full state as base64
   const handleExport = () => {
-    const data = JSON.stringify({ buckets, unranked, playCounts });
+    const data = JSON.stringify({ buckets, unranked, playCounts, bggIds, needsSort });
     const encoded = btoa(unescape(encodeURIComponent(data)));
     setSyncImportText(encoded);
     setTimeout(() => syncTextRef.current?.select(), 50);
@@ -216,8 +329,8 @@ export default function App() {
   const handleSyncImport = () => {
     try {
       const decoded = decodeURIComponent(escape(atob(syncImportText.trim())));
-      const { buckets: b, unranked: u, playCounts: p } = JSON.parse(decoded);
-      commit(b || {}, u || [], p || {});
+      const { buckets: b, unranked: u, playCounts: p, bggIds: ids, needsSort: ns } = JSON.parse(decoded);
+      commit(b || {}, u || [], p || {}, ids || {}, ns || []);
       setSyncMessage("Synced successfully!");
       setTimeout(() => { setSyncMessage(""); setShowSync(false); setSyncImportText(""); }, 2500);
     } catch {
@@ -241,9 +354,10 @@ export default function App() {
     let b = { ...buckets };
     let u = unranked.filter(n => !selected.has(n));
     Object.keys(b).forEach(k => { b[k] = b[k].filter(n => !selected.has(n)); });
+    const ns = needsSort.filter(n => !selected.has(n));
     setSelected(new Set());
     setSelectMode(false);
-    commit(b, u, playCounts);
+    commit(b, u, playCounts, undefined, ns);
   };
 
   const getList = (bucket) => bucket === "unranked" ? unranked : buckets[bucket] || [];
@@ -259,7 +373,7 @@ export default function App() {
     pos = Math.max(0, Math.min(pos, targetList.length));
     targetList.splice(pos, 0, name);
     if (toBucket === "unranked") u = targetList; else b[toBucket] = targetList;
-    return { b, u };
+    return { b, u, movedName: name };
   };
 
   const handleGameTap = (bucket, idx) => {
@@ -267,8 +381,9 @@ export default function App() {
     if (selectMode) { toggleSelect(name); return; }
     if (held) {
       if (held.bucket === bucket && held.idx === idx) { setHeld(null); return; }
-      const { b, u } = applyMove(held.bucket, held.idx, bucket, idx);
-      setHeld(null); commit(b, u, playCounts);
+      const { b, u, movedName } = applyMove(held.bucket, held.idx, bucket, idx);
+      const ns = needsSort.filter(n => n !== movedName);
+      setHeld(null); commit(b, u, playCounts, undefined, ns);
     } else {
       setHeld({ bucket, idx, name });
     }
@@ -276,16 +391,19 @@ export default function App() {
 
   const handleSlotTap = (bucket, insertBefore) => {
     if (!held || selectMode) return;
-    const { b, u } = applyMove(held.bucket, held.idx, bucket, insertBefore);
-    setHeld(null); commit(b, u, playCounts);
+    const { b, u, movedName } = applyMove(held.bucket, held.idx, bucket, insertBefore);
+    const ns = needsSort.filter(n => n !== movedName);
+    setHeld(null); commit(b, u, playCounts, undefined, ns);
   };
 
   const deleteGame = (bucket, idx, e) => {
     e.stopPropagation();
+    const name = getList(bucket)[idx];
     if (held?.bucket === bucket && held?.idx === idx) setHeld(null);
     let b = { ...buckets }; let u = [...unranked];
     if (bucket === "unranked") { u.splice(idx, 1); } else { b[bucket] = [...(b[bucket] || [])]; b[bucket].splice(idx, 1); }
-    commit(b, u, playCounts);
+    const ns = needsSort.filter(n => n !== name);
+    commit(b, u, playCounts, undefined, ns);
   };
 
   const onDragStart = (bucket, idx) => { if (selectMode) return; drag.current = { bucket, idx }; };
@@ -294,8 +412,9 @@ export default function App() {
     e.preventDefault();
     if (!drag.current) return;
     const { bucket: fb, idx: fi } = drag.current;
-    const { b, u } = applyMove(fb, fi, toBucket, insertBefore);
-    drag.current = null; setDragOver(null); commit(b, u, playCounts);
+    const { b, u, movedName } = applyMove(fb, fi, toBucket, insertBefore);
+    const ns = needsSort.filter(n => n !== movedName);
+    drag.current = null; setDragOver(null); commit(b, u, playCounts, undefined, ns);
   };
   const onDragEnd = () => { drag.current = null; setDragOver(null); };
 
@@ -350,6 +469,7 @@ export default function App() {
             const isDragging = drag.current?.bucket === bucket && drag.current?.idx === i;
             const plays = playCounts[name];
             const isSelected = selected.has(name);
+            const isNew = needsSort.includes(name);
 
             return (
               <div key={`${name}-${i}`}>
@@ -362,8 +482,8 @@ export default function App() {
                   style={{
                     display: "flex", alignItems: "center", gap: 6,
                     padding: "5px 8px 5px 10px", margin: "2px 3px",
-                    background: isSelected ? "#ffeef0" : beingMoved ? color + "18" : isDragging ? "#f0ebe0" : "#fff",
-                    border: isSelected ? "1px solid #e08090" : beingMoved ? `1px solid ${color}88` : `1px solid ${held && !selectMode ? color + "33" : "#e0d8cc"}`,
+                    background: isSelected ? "#ffeef0" : beingMoved ? color + "18" : isDragging ? "#f0ebe0" : isNew ? "#fffdf0" : "#fff",
+                    border: isSelected ? "1px solid #e08090" : beingMoved ? `1px solid ${color}88` : isNew ? "1px solid #e8d898" : `1px solid ${held && !selectMode ? color + "33" : "#e0d8cc"}`,
                     borderRadius: 6,
                     cursor: selectMode ? "pointer" : beingMoved ? "grabbing" : held ? "pointer" : "grab",
                     opacity: isDragging ? 0.4 : 1,
@@ -386,6 +506,14 @@ export default function App() {
                     <span style={{ color: color, fontSize: 13, fontWeight: 700, fontFamily: "'Space Mono', monospace", minWidth: 32, flexShrink: 0, textAlign: "right" }}>
                       #{rank}
                     </span>
+                  )}
+                  {isNew && !selectMode && (
+                    <span style={{
+                      fontSize: 8, fontWeight: 700, fontFamily: "'Space Mono', monospace",
+                      color: "#b8860b", flexShrink: 0,
+                      background: "#fdf6e0", border: "1px solid #e8d898",
+                      borderRadius: 3, padding: "1px 4px", letterSpacing: 0.5,
+                    }}>NEW</span>
                   )}
                   <span style={{ flex: 1, color: isSelected ? "#8a2a2a" : beingMoved ? color : "#2a2018", fontSize: 14, fontFamily: "'Playfair Display', serif", fontWeight: 400, letterSpacing: 0.2 }}>
                     {name}
@@ -459,12 +587,14 @@ export default function App() {
             }}>
               {selectMode ? "CANCEL" : "SELECT"}
             </button>
-            <button onClick={() => fileInputRef.current?.click()} style={{
-              background: "#f5f0e8", border: "1px solid #d0c8b8",
-              borderRadius: 8, color: "#8a7a5a", padding: "6px 10px",
-              cursor: "pointer", fontFamily: "'Space Mono', monospace", fontSize: 11, letterSpacing: 0.5,
+            <button onClick={handleBggSync} disabled={bggSyncing} style={{
+              background: bggSyncing ? "#e8e0d0" : "#f5f0e8",
+              border: "1px solid #d0c8b8",
+              borderRadius: 8, color: bggSyncing ? "#bbb" : "#8a7a5a",
+              padding: "6px 10px", cursor: bggSyncing ? "default" : "pointer",
+              fontFamily: "'Space Mono', monospace", fontSize: 11, letterSpacing: 0.5,
             }}>
-              CSV
+              BGG
             </button>
             <button onClick={() => { setShowSync(!showSync); setSyncMessage(""); setSyncImportText(""); }} style={{
               background: showSync ? "#edf3f7" : "#f5f0e8",
@@ -475,9 +605,39 @@ export default function App() {
             }}>
               SYNC
             </button>
-            <input ref={fileInputRef} type="file" accept=".csv" onChange={handleCSVImport} style={{ display: "none" }} />
           </div>
         </div>
+
+        {/* BGG username setup */}
+        {showBggSetup && (
+          <div style={{ marginBottom: 10, padding: "12px", background: "#f0f7ee", border: "1px solid #a0d0b0", borderRadius: 8 }}>
+            <div style={{ fontSize: 11, fontFamily: "'Space Mono', monospace", color: "#4a7c3f", marginBottom: 8, letterSpacing: 0.5 }}>ENTER YOUR BGG USERNAME</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                value={bggUsernameInput}
+                onChange={(e) => setBggUsernameInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleBggUsernameSubmit()}
+                placeholder="BGG username…"
+                autoFocus
+                style={{
+                  flex: 1, background: "#fff", border: "1px solid #a0d0b0",
+                  borderRadius: 6, color: "#2a2018", padding: "8px 10px",
+                  fontSize: 13, fontFamily: "'Playfair Display', serif",
+                }}
+              />
+              <button onClick={handleBggUsernameSubmit} style={{
+                background: "#4a7c3f", border: "none", borderRadius: 6,
+                color: "#fff", fontWeight: 700, padding: "0 14px",
+                cursor: "pointer", fontFamily: "'Space Mono', monospace", fontSize: 11,
+              }}>SYNC</button>
+              <button onClick={() => setShowBggSetup(false)} style={{
+                background: "#f5f0e8", border: "1px solid #d0c8b8", borderRadius: 6,
+                color: "#8a7a5a", padding: "0 10px",
+                cursor: "pointer", fontFamily: "'Space Mono', monospace", fontSize: 11,
+              }}>✕</button>
+            </div>
+          </div>
+        )}
 
         {importMessage && (
           <div style={{
@@ -528,7 +688,7 @@ export default function App() {
           </div>
         )}
 
-        {!selectMode && !showSync && (
+        {!selectMode && !showSync && !showBggSetup && (
           <div style={{ display: "flex", gap: 8 }}>
             <input
               value={input} onChange={(e) => setInput(e.target.value)}

@@ -1,24 +1,39 @@
 export const handler = async (event) => {
   const username = event.queryStringParameters?.username;
   if (!username) {
-    return { statusCode: 400, body: "Missing username" };
+    return { statusCode: 400, body: JSON.stringify({ error: "Missing username" }) };
   }
 
-  const bggUrl = `https://boardgamegeek.com/xmlapi2/collection?username=${encodeURIComponent(username)}&excludesubtype=boardgameexpansion&brief=1&minplays=1`;
+  const token = process.env.BGG_API_TOKEN;
+  if (!token) {
+    return { statusCode: 500, body: JSON.stringify({ error: "BGG API token not configured" }) };
+  }
 
-  const response = await fetch(bggUrl, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-      "Accept": "application/xml",
-      "Cookie": "SessionID=45c9fb9c60e2d3acf8cd1e5404f62af4397e8473u3675141"
-    }
-  });
+  const bggUrl = `https://boardgamegeek.com/xmlapi2/collection?username=${encodeURIComponent(username)}&excludesubtype=boardgameexpansion&stats=1&minplays=1`;
 
-  const xml = await response.text();
+  try {
+    const response = await fetch(bggUrl, {
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Accept": "application/xml"
+      }
+    });
 
-  return {
-    statusCode: 200,
-    headers: { "Content-Type": "text/plain", "Access-Control-Allow-Origin": "*" },
-    body: `STATUS: ${response.status}\nLENGTH: ${xml.length}\nBODY: ${xml.slice(0, 1000)}`
-  };
+    const body = await response.text();
+
+    return {
+      statusCode: response.status,
+      headers: {
+        "Content-Type": response.status === 200 ? "application/xml" : "text/plain",
+        "Access-Control-Allow-Origin": "*"
+      },
+      body: body
+    };
+  } catch (err) {
+    return {
+      statusCode: 502,
+      headers: { "Access-Control-Allow-Origin": "*" },
+      body: JSON.stringify({ error: "Failed to reach BGG: " + err.message })
+    };
+  }
 };
