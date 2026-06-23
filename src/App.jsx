@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
 const SCORES = Array.from({ length: 21 }, (_, i) => +(10 - i * 0.5).toFixed(1));
 const STORAGE_KEY = "game-ranker-v2";
@@ -76,10 +76,16 @@ export default function App() {
   const [showSync, setShowSync] = useState(false);
   const [syncImportText, setSyncImportText] = useState("");
   const [syncMessage, setSyncMessage] = useState("");
+  const [showAddOverlay, setShowAddOverlay] = useState(false);
+  const [addOverlayInput, setAddOverlayInput] = useState("");
+  const [addOverlayScore, setAddOverlayScore] = useState(null);
+  const [currentBucket, setCurrentBucket] = useState(null);
   const drag = useRef(null);
   const [dragOver, setDragOver] = useState(null);
   const fileInputRef = useRef(null);
   const syncTextRef = useRef(null);
+  const bucketRefs = useRef({});
+  const addOverlayInputRef = useRef(null);
 
   useEffect(() => {
     const { buckets: b, unranked: u, playCounts: p } = loadState();
@@ -87,6 +93,31 @@ export default function App() {
     setUnranked(u);
     setPlayCounts(p || {});
   }, []);
+
+  // Sticky bucket indicator: track which bucket is near the top of the viewport
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        // Find the topmost visible bucket
+        let topEntry = null;
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            if (!topEntry || entry.boundingClientRect.top < topEntry.boundingClientRect.top) {
+              topEntry = entry;
+            }
+          }
+        });
+        if (topEntry) {
+          setCurrentBucket(topEntry.target.dataset.bucket);
+        }
+      },
+      { rootMargin: "-120px 0px -70% 0px", threshold: 0 }
+    );
+    Object.values(bucketRefs.current).forEach((el) => { if (el) observer.observe(el); });
+    return () => observer.disconnect();
+  });
+
+  const setBucketRef = useCallback((bucket) => (el) => { bucketRefs.current[bucket] = el; }, []);
 
   const commit = (b, u, p) => {
     setBuckets(b); setUnranked(u); setPlayCounts(p);
@@ -99,6 +130,22 @@ export default function App() {
     if (unranked.includes(name) || Object.values(buckets).flat().includes(name)) return;
     commit(buckets, [name, ...unranked], playCounts);
     setInput("");
+  };
+
+  const addGameWithScore = () => {
+    const name = addOverlayInput.trim();
+    if (!name) return;
+    if (unranked.includes(name) || Object.values(buckets).flat().includes(name)) return;
+    if (addOverlayScore !== null) {
+      const b = { ...buckets };
+      b[addOverlayScore] = [...(b[addOverlayScore] || []), name];
+      commit(b, unranked, playCounts);
+    } else {
+      commit(buckets, [name, ...unranked], playCounts);
+    }
+    setAddOverlayInput("");
+    setAddOverlayScore(null);
+    setShowAddOverlay(false);
   };
 
   const handleCSVImport = (e) => {
@@ -240,7 +287,7 @@ export default function App() {
     const bg = isUnrankedBucket ? "#f9f6f0" : scoreBg(bucket);
 
     return (
-      <div key={bucket} style={{ display: "flex", alignItems: "stretch", minHeight: isEmpty && !held ? 24 : undefined, borderBottom: "1px solid #e8e0d0" }}>
+      <div key={bucket} ref={setBucketRef(bucket)} data-bucket={bucket} style={{ display: "flex", alignItems: "stretch", minHeight: isEmpty && !held ? 24 : undefined, borderBottom: "1px solid #e8e0d0" }}>
         <div
           onClick={() => held && !selectMode && handleSlotTap(bucket, null)}
           onDragOver={(e) => onDragOver(e, bucket, null)}
@@ -518,6 +565,119 @@ export default function App() {
         )}
         {SCORES.map((score) => renderBucket(score, score.toFixed(1), scoreColor(score)))}
       </div>
+
+      {/* Sticky bucket indicator */}
+      {currentBucket && currentBucket !== "unranked" && !showAddOverlay && (
+        <div style={{
+          position: "fixed", top: 90, right: 16, zIndex: 45,
+          background: scoreColor(parseFloat(currentBucket)),
+          color: "#fff", fontFamily: "'Playfair Display', serif",
+          fontWeight: 700, fontSize: 16, padding: "6px 12px",
+          borderRadius: 8, boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+          pointerEvents: "none", opacity: 0.9,
+        }}>
+          {parseFloat(currentBucket).toFixed(1)}
+        </div>
+      )}
+
+      {/* Floating add button */}
+      {!showAddOverlay && !selectMode && (
+        <button
+          onClick={() => { setShowAddOverlay(true); setTimeout(() => addOverlayInputRef.current?.focus(), 100); }}
+          style={{
+            position: "fixed", bottom: 24, right: 20, zIndex: 60,
+            width: 56, height: 56, borderRadius: "50%",
+            background: "#8a7a5a", border: "none", color: "#fff",
+            fontSize: 28, fontWeight: 300, cursor: "pointer",
+            boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            lineHeight: 1,
+          }}
+        >+</button>
+      )}
+
+      {/* Add game overlay */}
+      {showAddOverlay && (
+        <div
+          onClick={(e) => { if (e.target === e.currentTarget) { setShowAddOverlay(false); setAddOverlayInput(""); setAddOverlayScore(null); } }}
+          style={{
+            position: "fixed", inset: 0, zIndex: 70,
+            background: "rgba(0,0,0,0.3)",
+            display: "flex", alignItems: "flex-end", justifyContent: "center",
+            padding: "0 12px 24px",
+          }}
+        >
+          <div style={{
+            background: "#fff", borderRadius: 16, padding: "20px 16px 16px",
+            width: "100%", maxWidth: 420,
+            boxShadow: "0 -4px 20px rgba(0,0,0,0.12)",
+          }}>
+            <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 18, fontWeight: 700, color: "#2a2018", marginBottom: 14 }}>
+              Add Game
+            </div>
+            <input
+              ref={addOverlayInputRef}
+              value={addOverlayInput}
+              onChange={(e) => setAddOverlayInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addGameWithScore()}
+              placeholder="Game title…"
+              style={{
+                width: "100%", background: "#faf8f4", border: "1px solid #d8d0c0",
+                borderRadius: 8, color: "#2a2018", padding: "10px 12px",
+                fontSize: 15, fontFamily: "'Playfair Display', serif", marginBottom: 12,
+              }}
+            />
+            <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: "#aaa", letterSpacing: 0.5, marginBottom: 8 }}>
+              SCORE (OPTIONAL)
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 16 }}>
+              <button
+                onClick={() => setAddOverlayScore(null)}
+                style={{
+                  padding: "5px 10px", borderRadius: 6, fontSize: 12,
+                  fontFamily: "'Space Mono', monospace", cursor: "pointer",
+                  border: addOverlayScore === null ? "2px solid #888" : "1px solid #d8d0c0",
+                  background: addOverlayScore === null ? "#f0ebe0" : "#faf8f4",
+                  color: addOverlayScore === null ? "#2a2018" : "#aaa",
+                  fontWeight: addOverlayScore === null ? 700 : 400,
+                }}
+              >?</button>
+              {SCORES.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setAddOverlayScore(s)}
+                  style={{
+                    padding: "5px 8px", borderRadius: 6, fontSize: 11,
+                    fontFamily: "'Space Mono', monospace", cursor: "pointer",
+                    border: addOverlayScore === s ? `2px solid ${scoreColor(s)}` : "1px solid #d8d0c0",
+                    background: addOverlayScore === s ? scoreBg(s) : "#faf8f4",
+                    color: addOverlayScore === s ? scoreColor(s) : "#aaa",
+                    fontWeight: addOverlayScore === s ? 700 : 400,
+                  }}
+                >{s.toFixed(1)}</button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                onClick={() => { setShowAddOverlay(false); setAddOverlayInput(""); setAddOverlayScore(null); }}
+                style={{
+                  flex: 1, padding: "10px", background: "#f5f0e8", border: "1px solid #d0c8b8",
+                  borderRadius: 8, color: "#8a7a5a", fontWeight: 700,
+                  cursor: "pointer", fontFamily: "'Space Mono', monospace", fontSize: 12,
+                }}
+              >CANCEL</button>
+              <button
+                onClick={addGameWithScore}
+                style={{
+                  flex: 1, padding: "10px", background: "#8a7a5a", border: "none",
+                  borderRadius: 8, color: "#fff", fontWeight: 700,
+                  cursor: "pointer", fontFamily: "'Space Mono', monospace", fontSize: 12,
+                }}
+              >ADD</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
