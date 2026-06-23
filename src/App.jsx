@@ -96,26 +96,25 @@ export default function App() {
 
   // Sticky bucket indicator: track which bucket is near the top of the viewport
   useEffect(() => {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        // Find the topmost visible bucket
-        let topEntry = null;
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            if (!topEntry || entry.boundingClientRect.top < topEntry.boundingClientRect.top) {
-              topEntry = entry;
-            }
-          }
-        });
-        if (topEntry) {
-          setCurrentBucket(topEntry.target.dataset.bucket);
+    const handleScroll = () => {
+      let closest = null;
+      let closestDist = Infinity;
+      Object.entries(bucketRefs.current).forEach(([key, el]) => {
+        if (!el || key === "unranked") return;
+        const rect = el.getBoundingClientRect();
+        // Find the bucket whose top is closest to (but not far below) the header
+        const dist = Math.abs(rect.top - 120);
+        if (rect.top < window.innerHeight && rect.bottom > 120 && dist < closestDist) {
+          closestDist = dist;
+          closest = key;
         }
-      },
-      { rootMargin: "-120px 0px -70% 0px", threshold: 0 }
-    );
-    Object.values(bucketRefs.current).forEach((el) => { if (el) observer.observe(el); });
-    return () => observer.disconnect();
-  });
+      });
+      setCurrentBucket(closest);
+    };
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    handleScroll();
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
 
   const setBucketRef = useCallback((bucket) => (el) => { bucketRefs.current[bucket] = el; }, []);
 
