@@ -91,6 +91,9 @@ export default function App() {
   const [addOverlayInput, setAddOverlayInput] = useState("");
   const [addOverlayScore, setAddOverlayScore] = useState(null);
   const [currentBucket, setCurrentBucket] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [showSearch, setShowSearch] = useState(false);
+  const [showScorePicker, setShowScorePicker] = useState(false);
   const [bggUsername, setBggUsername] = useState(() => localStorage.getItem(BGG_USERNAME_KEY) || "");
   const [bggUsernameInput, setBggUsernameInput] = useState("");
   const [showBggSetup, setShowBggSetup] = useState(false);
@@ -100,10 +103,12 @@ export default function App() {
   const syncTextRef = useRef(null);
   const bucketRefs = useRef({});
   const addOverlayInputRef = useRef(null);
+  const searchInputRef = useRef(null);
   const headerRef = useRef(null);
   const [headerHeight, setHeaderHeight] = useState(120);
 
   const needsSortSet = useMemo(() => new Set(needsSort), [needsSort]);
+  const searchLower = searchQuery.toLowerCase().trim();
 
   useEffect(() => {
     const { buckets: b, unranked: u, playCounts: p, bggIds: ids, needsSort: ns } = loadState();
@@ -404,6 +409,14 @@ export default function App() {
     setHeld(null); commit(b, u, playCounts, undefined, ns);
   };
 
+  const reassignScore = (newBucket) => {
+    if (!held) return;
+    const { b, u, movedName } = applyMove(held.bucket, held.idx, newBucket, null);
+    const ns = [...needsSort.filter(n => n !== movedName), movedName];
+    setHeld(null); setShowScorePicker(false);
+    commit(b, u, playCounts, undefined, ns);
+  };
+
   const deleteGame = (bucket, idx, e) => {
     e.stopPropagation();
     const name = getList(bucket)[idx];
@@ -433,7 +446,10 @@ export default function App() {
 
   const renderBucket = (bucket, label, color, isUnrankedBucket = false) => {
     const games = getList(bucket);
+    const hasMatch = !searchLower || games.some(n => n.toLowerCase().includes(searchLower));
     const isEmpty = games.length === 0;
+    if (searchLower && !hasMatch && isEmpty) return null;
+    if (searchLower && !hasMatch) return null;
     const bg = isUnrankedBucket ? "#f9f6f0" : scoreBg(bucket);
 
     return (
@@ -478,9 +494,10 @@ export default function App() {
             const plays = playCounts[name];
             const isSelected = selected.has(name);
             const isNew = needsSortSet.has(name);
+            const matchesSearch = !searchLower || name.toLowerCase().includes(searchLower);
 
             return (
-              <div key={`${name}-${i}`}>
+              <div key={`${name}-${i}`} style={{ display: matchesSearch ? "block" : "none" }}>
                 <div
                   draggable={!selectMode}
                   onDragStart={() => onDragStart(bucket, i)} onDragEnd={onDragEnd}
@@ -586,6 +603,15 @@ export default function App() {
             )}
           </div>
           <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={() => { setShowSearch(!showSearch); if (showSearch) setSearchQuery(""); else setTimeout(() => searchInputRef.current?.focus(), 100); }} style={{
+              background: showSearch ? "#fdf6e0" : "#f5f0e8",
+              border: `1px solid ${showSearch ? "#e8d898" : "#d0c8b8"}`,
+              borderRadius: 8, color: showSearch ? "#b8860b" : "#8a7a5a",
+              padding: "6px 10px", cursor: "pointer",
+              fontFamily: "'Space Mono', monospace", fontSize: 11, letterSpacing: 0.5,
+            }}>
+              {showSearch ? "✕" : "🔍"}
+            </button>
             <button onClick={toggleSelectMode} style={{
               background: selectMode ? "#ffeef0" : "#f5f0e8",
               border: `1px solid ${selectMode ? "#e08090" : "#d0c8b8"}`,
@@ -696,7 +722,23 @@ export default function App() {
           </div>
         )}
 
-        {!selectMode && !showSync && !showBggSetup && (
+        {showSearch && (
+          <div style={{ marginBottom: 10 }}>
+            <input
+              ref={searchInputRef}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search games…"
+              style={{
+                width: "100%", background: "#fdf6e0", border: "1px solid #e8d898",
+                borderRadius: 8, color: "#2a2018", padding: "9px 12px",
+                fontSize: 14, fontFamily: "'Playfair Display', serif",
+              }}
+            />
+          </div>
+        )}
+
+        {!selectMode && !showSync && !showBggSetup && !showSearch && (
           <div style={{ display: "flex", gap: 8 }}>
             <input
               value={input} onChange={(e) => setInput(e.target.value)}
@@ -744,12 +786,75 @@ export default function App() {
           <span style={{ color: "#2a2018", fontSize: 14, fontFamily: "'Playfair Display', serif", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {held.name}
           </span>
+          <button onClick={() => setShowScorePicker(true)} style={{
+            background: "#8a7a5a", border: "none",
+            color: "#fff", borderRadius: 6, padding: "7px 12px",
+            cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "'Space Mono', monospace",
+            letterSpacing: 0.5,
+          }}>SCORE</button>
           <button onClick={() => setHeld(null)} style={{
             background: "#c0392b", border: "none",
             color: "#fff", borderRadius: 6, padding: "7px 16px",
             cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "'Space Mono', monospace",
             letterSpacing: 0.5,
           }}>✕ CANCEL</button>
+        </div>
+      )}
+
+      {/* Score picker overlay */}
+      {showScorePicker && held && (
+        <div
+          onClick={(e) => { if (e.target === e.currentTarget) setShowScorePicker(false); }}
+          style={{
+            position: "fixed", inset: 0, zIndex: 70,
+            background: "rgba(0,0,0,0.3)",
+            display: "flex", alignItems: "flex-end", justifyContent: "center",
+            padding: "0 12px 24px",
+          }}
+        >
+          <div style={{
+            background: "#fff", borderRadius: 16, padding: "20px 16px 16px",
+            width: "100%", maxWidth: 420,
+            boxShadow: "0 -4px 20px rgba(0,0,0,0.12)",
+          }}>
+            <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 16, fontWeight: 700, color: "#2a2018", marginBottom: 4 }}>
+              Set Score
+            </div>
+            <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 13, color: "#888", marginBottom: 14 }}>
+              {held.name}
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 16 }}>
+              <button
+                onClick={() => reassignScore("unranked")}
+                style={{
+                  padding: "5px 10px", borderRadius: 6, fontSize: 12,
+                  fontFamily: "'Space Mono', monospace", cursor: "pointer",
+                  border: "1px solid #d8d0c0", background: "#faf8f4", color: "#888",
+                }}
+              >?</button>
+              {SCORES.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => reassignScore(s)}
+                  style={{
+                    padding: "5px 8px", borderRadius: 6, fontSize: 11,
+                    fontFamily: "'Space Mono', monospace", cursor: "pointer",
+                    border: `1px solid ${scoreColor(s)}44`,
+                    background: scoreBg(s),
+                    color: scoreColor(s), fontWeight: 600,
+                  }}
+                >{s.toFixed(1)}</button>
+              ))}
+            </div>
+            <button
+              onClick={() => setShowScorePicker(false)}
+              style={{
+                width: "100%", padding: "10px", background: "#f5f0e8", border: "1px solid #d0c8b8",
+                borderRadius: 8, color: "#8a7a5a", fontWeight: 700,
+                cursor: "pointer", fontFamily: "'Space Mono', monospace", fontSize: 12,
+              }}
+            >CANCEL</button>
+          </div>
         </div>
       )}
 
