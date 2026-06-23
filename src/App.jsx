@@ -97,7 +97,8 @@ function parseBGGCollection(xml) {
     const ratingVal = ratingEl?.getAttribute("value");
     const rating = ratingVal && ratingVal !== "N/A" ? parseFloat(ratingVal) : null;
     if (name && id) {
-      games.push({ id, name, plays: numplays, rating });
+      const collid = item.getAttribute("collid");
+      games.push({ id, name, plays: numplays, rating, collid });
     }
   });
   return games;
@@ -114,15 +115,16 @@ function loadState() {
         playCounts: parsed.playCounts || {},
         bggIds: parsed.bggIds || {},
         needsSort: parsed.needsSort || [],
+        collIds: parsed.collIds || {},
       };
     }
   } catch {}
-  return { buckets: {}, unranked: [], playCounts: {}, bggIds: {}, needsSort: [] };
+  return { buckets: {}, unranked: [], playCounts: {}, bggIds: {}, needsSort: [], collIds: {} };
 }
 
-function saveState(buckets, unranked, playCounts, bggIds, needsSort) {
+function saveState(buckets, unranked, playCounts, bggIds, needsSort, collIds) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ buckets, unranked, playCounts, bggIds, needsSort }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ buckets, unranked, playCounts, bggIds, needsSort, collIds }));
   } catch {}
 }
 
@@ -131,6 +133,7 @@ export default function App() {
   const [unranked, setUnranked] = useState([]);
   const [playCounts, setPlayCounts] = useState({});
   const [bggIds, setBggIds] = useState({});
+  const [collIds, setCollIds] = useState({});
   const [needsSort, setNeedsSort] = useState([]);
   const [input, setInput] = useState("");
   const [held, setHeld] = useState(null);
@@ -153,6 +156,9 @@ export default function App() {
   const [bggUsernameInput, setBggUsernameInput] = useState("");
   const [showBggSetup, setShowBggSetup] = useState(false);
   const [bggSyncing, setBggSyncing] = useState(false);
+  const [bggPushing, setBggPushing] = useState(false);
+
+  // ... refs
   const drag = useRef(null);
   const [dragOver, setDragOver] = useState(null);
   const syncTextRef = useRef(null);
@@ -166,12 +172,13 @@ export default function App() {
   const searchLower = searchQuery.toLowerCase().trim();
 
   useEffect(() => {
-    const { buckets: b, unranked: u, playCounts: p, bggIds: ids, needsSort: ns } = loadState();
+    const { buckets: b, unranked: u, playCounts: p, bggIds: ids, needsSort: ns, collIds: cids } = loadState();
     setBuckets(b);
     setUnranked(u);
     setPlayCounts(p || {});
     setBggIds(ids || {});
     setNeedsSort(ns || []);
+    setCollIds(cids || {});
   }, []);
 
   useEffect(() => {
@@ -217,11 +224,12 @@ export default function App() {
 
   const setBucketRef = useCallback((bucket) => (el) => { bucketRefs.current[bucket] = el; }, []);
 
-  const commit = (b, u, p, ids, ns) => {
+  const commit = (b, u, p, ids, ns, cids) => {
     const finalIds = ids ?? bggIds;
     const finalNs = ns ?? needsSort;
-    setBuckets(b); setUnranked(u); setPlayCounts(p); setBggIds(finalIds); setNeedsSort(finalNs);
-    saveState(b, u, p, finalIds, finalNs);
+    const finalCids = cids ?? collIds;
+    setBuckets(b); setUnranked(u); setPlayCounts(p); setBggIds(finalIds); setNeedsSort(finalNs); setCollIds(finalCids);
+    saveState(b, u, p, finalIds, finalNs, finalCids);
   };
 
   const addGame = () => {
@@ -316,27 +324,30 @@ export default function App() {
     let newP = { ...playCounts };
     let newIds = { ...bggIds };
     let newNs = [...needsSort];
+    let newCids = { ...collIds };
 
     let added = 0;
     let updated = 0;
     let linked = 0;
     let unmatched = [];
 
-    bggGames.forEach(({ id, name: bggName, plays, rating }) => {
+    bggGames.forEach(({ id, name: bggName, plays, rating, collid }) => {
       // Try to find existing game: first by BGG ID, then by name (fuzzy)
       const existingName = existingByBggId[id] || fuzzyFindMatch(bggName, existingByName);
 
       if (existingName) {
-        // Game exists — update play count, link BGG ID if needed
+        // Game exists — update play count, link BGG ID and collid if needed
         newP[existingName] = Math.max(plays, newP[existingName] || 0);
         if (!newIds[existingName]) {
           newIds[existingName] = id;
           linked++;
         }
+        if (collid) newCids[existingName] = collid;
         updated++;
       } else {
         // New game — add to bucket based on rating or unranked
         newIds[bggName] = id;
+        if (collid) newCids[bggName] = collid;
         newP[bggName] = plays;
 
         if (rating !== null && !isNaN(rating)) {
@@ -355,7 +366,7 @@ export default function App() {
       }
     });
 
-    commit(newB, newU, newP, newIds, newNs);
+    commit(newB, newU, newP, newIds, newNs, newCids);
 
     // Save username
     localStorage.setItem(BGG_USERNAME_KEY, username);
@@ -390,9 +401,63 @@ export default function App() {
     syncWithBGG(u);
   };
 
+  // Push ratings to BGG
+  const pushToBGG = async () => {
+    if (!bggUsername) { setShowBggSetup(true); return; }
+    setBggPushing(true);
+    setImportStatus("loading");
+    setImportMessage("Pushing ratings to BGG...");
+
+    // Collect all ranked games that have both a BGG ID and a collid
+    const updates = [];
+    Object.entries(buckets).forEach(([score, games]) => {
+      games.forEach(name => {
+        const objectid = bggIds[name];
+        const collid = collIds[name];
+        if (objectid && collid) {
+          updates.push({ collid, objectid, rating: parseFloat(score) });
+        }
+      });
+    });
+
+    if (updates.length === 0) {
+      setImportStatus("error");
+      setImportMessage("No games to push. Sync from BGG first to link your games.");
+      setBggPushing(false);
+      return;
+    }
+
+    let totalSuccess = 0;
+    let totalFailed = 0;
+
+    // Send in batches of 10
+    for (let i = 0; i < updates.length; i += 10) {
+      const batch = updates.slice(i, i + 10);
+      setImportMessage(`Pushing ratings to BGG... (${i}/${updates.length})`);
+      try {
+        const res = await fetch('/.netlify/functions/bgg-rate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ updates: batch, username: bggUsername }),
+        });
+        const data = await res.json();
+        totalSuccess += data.success || 0;
+        totalFailed += (data.total || 0) - (data.success || 0);
+      } catch (err) {
+        totalFailed += batch.length;
+      }
+      // Delay between batches
+      if (i + 10 < updates.length) await new Promise(r => setTimeout(r, 1000));
+    }
+
+    setBggPushing(false);
+    setImportStatus(totalFailed === 0 ? "success" : "error");
+    setImportMessage(`Pushed ${totalSuccess} rating${totalSuccess !== 1 ? "s" : ""} to BGG.${totalFailed > 0 ? ` ${totalFailed} failed.` : ""}`);
+  };
+
   // Export: encode full state as base64
   const handleExport = () => {
-    const data = JSON.stringify({ buckets, unranked, playCounts, bggIds, needsSort });
+    const data = JSON.stringify({ buckets, unranked, playCounts, bggIds, needsSort, collIds });
     const encoded = btoa(unescape(encodeURIComponent(data)));
     setSyncImportText(encoded);
     setTimeout(() => syncTextRef.current?.select(), 50);
@@ -402,8 +467,8 @@ export default function App() {
   const handleSyncImport = () => {
     try {
       const decoded = decodeURIComponent(escape(atob(syncImportText.trim())));
-      const { buckets: b, unranked: u, playCounts: p, bggIds: ids, needsSort: ns } = JSON.parse(decoded);
-      commit(b || {}, u || [], p || {}, ids || {}, ns || []);
+      const { buckets: b, unranked: u, playCounts: p, bggIds: ids, needsSort: ns, collIds: cids } = JSON.parse(decoded);
+      commit(b || {}, u || [], p || {}, ids || {}, ns || [], cids || {});
       setSyncMessage("Synced successfully!");
       setTimeout(() => { setSyncMessage(""); setShowSync(false); setSyncImportText(""); }, 2500);
     } catch {
@@ -681,7 +746,7 @@ export default function App() {
             }}>
               {selectMode ? "CANCEL" : "SELECT"}
             </button>
-            <button onClick={handleBggSync} disabled={bggSyncing} style={{
+            <button onClick={handleBggSync} disabled={bggSyncing || bggPushing} style={{
               background: bggSyncing ? "#e8e0d0" : "#f5f0e8",
               border: "1px solid #d0c8b8",
               borderRadius: 8, color: bggSyncing ? "#bbb" : "#8a7a5a",
@@ -689,6 +754,15 @@ export default function App() {
               fontFamily: "'Space Mono', monospace", fontSize: 11, letterSpacing: 0.5,
             }}>
               BGG
+            </button>
+            <button onClick={pushToBGG} disabled={bggPushing || bggSyncing} style={{
+              background: bggPushing ? "#e8e0d0" : "#f0f7ee",
+              border: `1px solid ${bggPushing ? "#d0c8b8" : "#a0d0b0"}`,
+              borderRadius: 8, color: bggPushing ? "#bbb" : "#4a7c3f",
+              padding: "6px 10px", cursor: bggPushing ? "default" : "pointer",
+              fontFamily: "'Space Mono', monospace", fontSize: 11, letterSpacing: 0.5,
+            }}>
+              PUSH
             </button>
             <button onClick={() => { setShowSync(!showSync); setSyncMessage(""); setSyncImportText(""); }} style={{
               background: showSync ? "#edf3f7" : "#f5f0e8",
