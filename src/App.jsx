@@ -393,19 +393,15 @@ export default function App() {
       const ns = needsSort.filter(n => n !== movedName);
       setHeld(null); commit(b, u, playCounts, undefined, ns);
     } else {
-      const scrollBefore = window.scrollY;
       setHeld({ bucket, idx, name });
-      requestAnimationFrame(() => { window.scrollTo(0, scrollBefore); });
     }
   };
 
   const handleSlotTap = (bucket, insertBefore) => {
     if (!held || selectMode) return;
-    const scrollBefore = window.scrollY;
     const { b, u, movedName } = applyMove(held.bucket, held.idx, bucket, insertBefore);
     const ns = needsSort.filter(n => n !== movedName);
     setHeld(null); commit(b, u, playCounts, undefined, ns);
-    requestAnimationFrame(() => { window.scrollTo(0, scrollBefore); });
   };
 
   const deleteGame = (bucket, idx, e) => {
@@ -424,11 +420,9 @@ export default function App() {
     e.preventDefault();
     if (!drag.current) return;
     const { bucket: fb, idx: fi } = drag.current;
-    const scrollBefore = window.scrollY;
     const { b, u, movedName } = applyMove(fb, fi, toBucket, insertBefore);
     const ns = needsSort.filter(n => n !== movedName);
     drag.current = null; setDragOver(null); commit(b, u, playCounts, undefined, ns);
-    requestAnimationFrame(() => { window.scrollTo(0, scrollBefore); });
   };
   const onDragEnd = () => { drag.current = null; setDragOver(null); };
 
@@ -472,9 +466,9 @@ export default function App() {
           style={{ flex: 1, padding: isEmpty ? "0" : "2px 4px", background: isEmpty ? "#faf8f4" : bg }}
           onDragOver={(e) => { if (isEmpty) onDragOver(e, bucket, null); }}
           onDrop={(e) => { if (isEmpty) onDrop(e, bucket, null); }}
-          onClick={(e) => { if (held && !selectMode && e.target === e.currentTarget) { const s = window.scrollY; setHeld(null); requestAnimationFrame(() => window.scrollTo(0, s)); } }}
+          onClick={(e) => { if (held && !selectMode && e.target === e.currentTarget) setHeld(null); }}
         >
-          {held && !selectMode && <InsertSlot onClick={() => handleSlotTap(bucket, 0)} color={color} />}
+          <InsertSlot active={!!held && !selectMode} onClick={() => handleSlotTap(bucket, 0)} color={color} />
           {dragOver?.bucket === bucket && dragOver.insertBefore === 0 && <DropLine color={color} />}
 
           {games.map((name, i) => {
@@ -550,8 +544,8 @@ export default function App() {
                     >×</button>
                   )}
                 </div>
-                {held && !selectMode && !(held.bucket === bucket && held.idx === i) && (
-                  <InsertSlot onClick={() => handleSlotTap(bucket, i + 1)} color={color} />
+                {!(held?.bucket === bucket && held?.idx === i) && (
+                  <InsertSlot active={!!held && !selectMode} onClick={() => handleSlotTap(bucket, i + 1)} color={color} />
                 )}
                 {dragOver?.bucket === bucket && dragOver.insertBefore === i + 1 && <DropLine color={color} />}
               </div>
@@ -750,7 +744,7 @@ export default function App() {
           <span style={{ color: "#2a2018", fontSize: 14, fontFamily: "'Playfair Display', serif", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {held.name}
           </span>
-          <button onClick={() => { const s = window.scrollY; setHeld(null); requestAnimationFrame(() => window.scrollTo(0, s)); }} style={{
+          <button onClick={() => setHeld(null)} style={{
             background: "#c0392b", border: "none",
             color: "#fff", borderRadius: 6, padding: "7px 16px",
             cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "'Space Mono', monospace",
@@ -760,9 +754,7 @@ export default function App() {
       )}
 
       <div style={{ paddingBottom: 60 }} onClick={(e) => {
-        if (held && !selectMode && e.target === e.currentTarget) {
-          const s = window.scrollY; setHeld(null); requestAnimationFrame(() => window.scrollTo(0, s));
-        }
+        if (held && !selectMode && e.target === e.currentTarget) setHeld(null);
       }}>
         {(unranked.length > 0 || (held && held.bucket !== "unranked")) && (
           <div>{renderBucket("unranked", "?", "#888", true)}</div>
@@ -872,12 +864,25 @@ export default function App() {
   );
 }
 
-function InsertSlot({ onClick, color }) {
+function InsertSlot({ onClick, color, active }) {
   const [hover, setHover] = useState(false);
   return (
-    <div onClick={onClick} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
-      style={{ height: hover ? 16 : 8, margin: "0 4px", display: "flex", alignItems: "center", cursor: "pointer", transition: "height 0.1s", overflow: "hidden" }}>
-      <div style={{ height: 2, flex: 1, background: hover ? color : color + "33", borderRadius: 2, transition: "background 0.1s" }} />
+    <div
+      onClick={active ? onClick : undefined}
+      onMouseEnter={active ? () => setHover(true) : undefined}
+      onMouseLeave={active ? () => setHover(false) : undefined}
+      style={{
+        height: active && hover ? 16 : 8,
+        margin: "0 4px",
+        display: "flex", alignItems: "center",
+        cursor: active ? "pointer" : "default",
+        transition: "height 0.1s",
+        overflow: "hidden",
+      }}
+    >
+      {active && (
+        <div style={{ height: 2, flex: 1, background: hover ? color : color + "33", borderRadius: 2, transition: "background 0.1s" }} />
+      )}
     </div>
   );
 }
