@@ -86,6 +86,8 @@ export default function App() {
   const syncTextRef = useRef(null);
   const bucketRefs = useRef({});
   const addOverlayInputRef = useRef(null);
+  const headerRef = useRef(null);
+  const [headerHeight, setHeaderHeight] = useState(120);
 
   useEffect(() => {
     const { buckets: b, unranked: u, playCounts: p } = loadState();
@@ -94,30 +96,36 @@ export default function App() {
     setPlayCounts(p || {});
   }, []);
 
+  // Measure header height dynamically
+  useEffect(() => {
+    if (!headerRef.current) return;
+    const measure = () => setHeaderHeight(headerRef.current.getBoundingClientRect().height);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(headerRef.current);
+    return () => observer.disconnect();
+  }, []);
+
   // Sticky bucket indicator: track which bucket is near the top of the viewport
   useEffect(() => {
     const handleScroll = () => {
-      const headerBottom = 120;
+      const hh = headerRef.current ? headerRef.current.getBoundingClientRect().height : 120;
       let found = null;
-      // Walk through score buckets in order, find the one spanning the header line
-      const allBuckets = SCORES;
-      for (const key of allBuckets) {
+      for (const key of SCORES) {
         const el = bucketRefs.current[key];
         if (!el) continue;
         const rect = el.getBoundingClientRect();
-        // This bucket spans the area just below the header
-        if (rect.top <= headerBottom && rect.bottom > headerBottom) {
+        if (rect.top <= hh && rect.bottom > hh) {
           found = key;
           break;
         }
       }
-      // If nothing spans the header, find the first bucket below it
       if (!found) {
-        for (const key of allBuckets) {
+        for (const key of SCORES) {
           const el = bucketRefs.current[key];
           if (!el) continue;
           const rect = el.getBoundingClientRect();
-          if (rect.top > headerBottom && rect.top < window.innerHeight) {
+          if (rect.top > hh && rect.top < window.innerHeight) {
             found = key;
             break;
           }
@@ -424,7 +432,7 @@ export default function App() {
         textarea::placeholder { color: #bbb; }
       `}</style>
 
-      <div style={{ padding: "18px 16px 14px", background: "#fff", borderBottom: "2px solid #e8e0d0", position: "sticky", top: 0, zIndex: 50, boxShadow: "0 2px 8px rgba(0,0,0,0.06)" }}>
+      <div ref={headerRef} style={{ padding: "18px 16px 14px", background: "#fff", borderBottom: "2px solid #e8e0d0", position: "sticky", top: 0, zIndex: 50, boxShadow: "0 2px 8px rgba(0,0,0,0.06)" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
           <div style={{ fontFamily: "'Playfair Display', serif", color: "#2a2018", fontSize: 22, fontWeight: 700, letterSpacing: 0.5 }}>
             Game Ranker
@@ -573,26 +581,24 @@ export default function App() {
       <div style={{ paddingBottom: 60 }} onClick={(e) => {
         if (held && !selectMode && e.target === e.currentTarget) setHeld(null);
       }}>
-        {/* Sticky bucket indicator - always rendered to maintain position */}
-        <div style={{
-          position: "sticky", top: 115, zIndex: 42,
-          background: currentBucket && currentBucket !== "unranked" ? scoreBg(parseFloat(currentBucket)) : "transparent",
-          borderBottom: currentBucket && currentBucket !== "unranked" ? `2px solid ${scoreColor(parseFloat(currentBucket))}` : "none",
-          padding: currentBucket && currentBucket !== "unranked" ? "3px 16px" : "0",
-          height: currentBucket && currentBucket !== "unranked" ? "auto" : 0,
-          overflow: "hidden",
-          display: "flex", alignItems: "center",
-          transition: "background 0.15s, border-color 0.15s",
-        }}>
-          {currentBucket && currentBucket !== "unranked" && (
+        {/* Sticky bucket indicator - fixed bar below header */}
+        {currentBucket && currentBucket !== "unranked" && (
+          <div style={{
+            position: "fixed", top: headerHeight, left: 0, right: 0, zIndex: 49,
+            background: scoreBg(parseFloat(currentBucket)),
+            borderBottom: `2px solid ${scoreColor(parseFloat(currentBucket))}`,
+            padding: "3px 16px",
+            display: "flex", alignItems: "center",
+            transition: "background 0.15s, border-color 0.15s",
+          }}>
             <span style={{
               fontFamily: "'Playfair Display', serif", fontWeight: 700,
               fontSize: 13, color: scoreColor(parseFloat(currentBucket)),
             }}>
               {parseFloat(currentBucket).toFixed(1)}
             </span>
-          )}
-        </div>
+          </div>
+        )}
 
         {(unranked.length > 0 || (held && held.bucket !== "unranked")) && (
           <div>{renderBucket("unranked", "?", "#888", true)}</div>
