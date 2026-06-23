@@ -573,25 +573,29 @@ export default function App() {
       <div style={{ paddingBottom: 60 }} onClick={(e) => {
         if (held && !selectMode && e.target === e.currentTarget) setHeld(null);
       }}>
+        {/* Sticky bucket indicator - slim bar below header */}
+        {currentBucket && currentBucket !== "unranked" && !showAddOverlay && (
+          <div style={{
+            position: "sticky", top: 115, zIndex: 42,
+            background: scoreBg(parseFloat(currentBucket)),
+            borderBottom: `2px solid ${scoreColor(parseFloat(currentBucket))}`,
+            padding: "3px 16px",
+            display: "flex", alignItems: "center",
+          }}>
+            <span style={{
+              fontFamily: "'Playfair Display', serif", fontWeight: 700,
+              fontSize: 13, color: scoreColor(parseFloat(currentBucket)),
+            }}>
+              {parseFloat(currentBucket).toFixed(1)}
+            </span>
+          </div>
+        )}
+
         {(unranked.length > 0 || (held && held.bucket !== "unranked")) && (
           <div>{renderBucket("unranked", "?", "#888", true)}</div>
         )}
         {SCORES.map((score) => renderBucket(score, score.toFixed(1), scoreColor(score)))}
       </div>
-
-      {/* Sticky bucket indicator */}
-      {currentBucket && currentBucket !== "unranked" && !showAddOverlay && (
-        <div style={{
-          position: "fixed", top: 12, left: "50%", transform: "translateX(-50%)", zIndex: 55,
-          background: scoreColor(parseFloat(currentBucket)),
-          color: "#fff", fontFamily: "'Playfair Display', serif",
-          fontWeight: 700, fontSize: 14, padding: "4px 14px",
-          borderRadius: 20, boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
-          pointerEvents: "none",
-        }}>
-          {parseFloat(currentBucket).toFixed(1)}
-        </div>
-      )}
 
       {/* Floating add button */}
       {!showAddOverlay && !selectMode && (
