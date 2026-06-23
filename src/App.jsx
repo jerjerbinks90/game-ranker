@@ -30,6 +30,50 @@ function roundToHalf(n) {
   return Math.round(n * 2) / 2;
 }
 
+function normalizeName(name) {
+  return name
+    .toLowerCase()
+    .replace(/\s*[:–—]\s.*$/, '')           // strip after colon/dash (subtitles)
+    .replace(/\s*\(.*?\)/g, '')              // strip parenthetical (years, etc.)
+    .replace(/\b(deluxe|collector'?s?|big\s*box|revised|new)\s*(edition)?\b/g, '')
+    .replace(/\b(second|third|fourth|2nd|3rd|4th|5th)\s*(edition)?\b/g, '')
+    .replace(/\bedition\b/g, '')
+    .replace(/[^a-z0-9\s]/g, '')             // remove punctuation
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function fuzzyFindMatch(bggName, existingNames) {
+  const bggLower = bggName.toLowerCase();
+  const bggNorm = normalizeName(bggName);
+
+  // Exact match
+  if (existingNames[bggLower]) return existingNames[bggLower];
+
+  // Normalized match + substring match
+  let bestMatch = null;
+  let bestScore = 0;
+
+  for (const [key, originalName] of Object.entries(existingNames)) {
+    const existNorm = normalizeName(key);
+
+    // Normalized exact match
+    if (existNorm === bggNorm && existNorm.length > 0) return originalName;
+
+    // Substring: one contains the other (min 4 chars to avoid false positives)
+    if (existNorm.length >= 4 && bggNorm.length >= 4) {
+      if (bggNorm.includes(existNorm) || existNorm.includes(bggNorm)) {
+        const score = Math.min(existNorm.length, bggNorm.length) / Math.max(existNorm.length, bggNorm.length);
+        if (score > bestScore) { bestScore = score; bestMatch = originalName; }
+      }
+    }
+  }
+
+  // Only accept substring matches with reasonable overlap
+  if (bestMatch && bestScore > 0.3) return bestMatch;
+  return null;
+}
+
 function parseBGGCollection(xml) {
   const parser = new DOMParser();
   const doc = parser.parseFromString(xml, "application/xml");
@@ -268,8 +312,8 @@ export default function App() {
     let linked = 0;
 
     bggGames.forEach(({ id, name: bggName, plays, rating }) => {
-      // Try to find existing game: first by BGG ID, then by name
-      const existingName = existingByBggId[id] || existingByName[bggName.toLowerCase()];
+      // Try to find existing game: first by BGG ID, then by name (fuzzy)
+      const existingName = existingByBggId[id] || fuzzyFindMatch(bggName, existingByName);
 
       if (existingName) {
         // Game exists — update play count, link BGG ID if needed
