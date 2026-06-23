@@ -94,6 +94,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
   const [showScorePicker, setShowScorePicker] = useState(false);
+  const [scorePickerSelection, setScorePickerSelection] = useState(null);
   const [bggUsername, setBggUsername] = useState(() => localStorage.getItem(BGG_USERNAME_KEY) || "");
   const [bggUsernameInput, setBggUsernameInput] = useState("");
   const [showBggSetup, setShowBggSetup] = useState(false);
@@ -786,7 +787,7 @@ export default function App() {
           <span style={{ color: "#2a2018", fontSize: 14, fontFamily: "'Playfair Display', serif", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {held.name}
           </span>
-          <button onClick={() => setShowScorePicker(true)} style={{
+          <button onClick={() => { setShowScorePicker(true); setScorePickerSelection(null); }} style={{
             background: "#8a7a5a", border: "none",
             color: "#fff", borderRadius: 6, padding: "7px 12px",
             cursor: "pointer", fontSize: 12, fontWeight: 700, fontFamily: "'Space Mono', monospace",
@@ -804,7 +805,7 @@ export default function App() {
       {/* Score picker overlay */}
       {showScorePicker && held && (
         <div
-          onClick={(e) => { if (e.target === e.currentTarget) setShowScorePicker(false); }}
+          onClick={(e) => { if (e.target === e.currentTarget) { setShowScorePicker(false); setScorePickerSelection(null); } }}
           style={{
             position: "fixed", inset: 0, zIndex: 70,
             background: "rgba(0,0,0,0.3)",
@@ -823,37 +824,54 @@ export default function App() {
             <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 13, color: "#888", marginBottom: 14 }}>
               {held.name}
             </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 16 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 16 }}>
               <button
-                onClick={() => reassignScore("unranked")}
+                onClick={() => setScorePickerSelection("unranked")}
                 style={{
-                  padding: "5px 10px", borderRadius: 6, fontSize: 12,
+                  padding: "8px 14px", borderRadius: 8, fontSize: 14,
                   fontFamily: "'Space Mono', monospace", cursor: "pointer",
-                  border: "1px solid #d8d0c0", background: "#faf8f4", color: "#888",
+                  border: scorePickerSelection === "unranked" ? "2px solid #888" : "1px solid #d8d0c0",
+                  background: scorePickerSelection === "unranked" ? "#f0ebe0" : "#faf8f4",
+                  color: scorePickerSelection === "unranked" ? "#2a2018" : "#888",
+                  fontWeight: scorePickerSelection === "unranked" ? 700 : 400,
                 }}
               >?</button>
               {SCORES.map((s) => (
                 <button
                   key={s}
-                  onClick={() => reassignScore(s)}
+                  onClick={() => setScorePickerSelection(s)}
                   style={{
-                    padding: "5px 8px", borderRadius: 6, fontSize: 11,
+                    padding: "8px 12px", borderRadius: 8, fontSize: 13,
                     fontFamily: "'Space Mono', monospace", cursor: "pointer",
-                    border: `1px solid ${scoreColor(s)}44`,
-                    background: scoreBg(s),
-                    color: scoreColor(s), fontWeight: 600,
+                    border: scorePickerSelection === s ? `2px solid ${scoreColor(s)}` : "1px solid #d8d0c0",
+                    background: scorePickerSelection === s ? scoreBg(s) : "#faf8f4",
+                    color: scorePickerSelection === s ? scoreColor(s) : "#aaa",
+                    fontWeight: scorePickerSelection === s ? 700 : 400,
                   }}
                 >{s.toFixed(1)}</button>
               ))}
             </div>
-            <button
-              onClick={() => setShowScorePicker(false)}
-              style={{
-                width: "100%", padding: "10px", background: "#f5f0e8", border: "1px solid #d0c8b8",
-                borderRadius: 8, color: "#8a7a5a", fontWeight: 700,
-                cursor: "pointer", fontFamily: "'Space Mono', monospace", fontSize: 12,
-              }}
-            >CANCEL</button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                onClick={() => { setShowScorePicker(false); setScorePickerSelection(null); }}
+                style={{
+                  flex: 1, padding: "10px", background: "#f5f0e8", border: "1px solid #d0c8b8",
+                  borderRadius: 8, color: "#8a7a5a", fontWeight: 700,
+                  cursor: "pointer", fontFamily: "'Space Mono', monospace", fontSize: 12,
+                }}
+              >CANCEL</button>
+              <button
+                onClick={() => { if (scorePickerSelection !== null) reassignScore(scorePickerSelection); }}
+                disabled={scorePickerSelection === null}
+                style={{
+                  flex: 1, padding: "10px",
+                  background: scorePickerSelection !== null ? "#8a7a5a" : "#ccc",
+                  border: "none", borderRadius: 8, color: "#fff", fontWeight: 700,
+                  cursor: scorePickerSelection !== null ? "pointer" : "default",
+                  fontFamily: "'Space Mono', monospace", fontSize: 12,
+                }}
+              >CONFIRM</button>
+            </div>
           </div>
         </div>
       )}
