@@ -441,6 +441,12 @@ export default function App() {
           body: JSON.stringify({ updates: batch, username: bggUsername }),
         });
         const data = await res.json();
+        if (data.error) {
+          setImportStatus("error");
+          setImportMessage(`Push failed: ${data.error}`);
+          setBggPushing(false);
+          return;
+        }
         totalSuccess += data.success || 0;
         totalFailed += (data.total || 0) - (data.success || 0);
       } catch (err) {

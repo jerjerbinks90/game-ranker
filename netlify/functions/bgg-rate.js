@@ -26,7 +26,16 @@ export const handler = async (event) => {
       redirect: 'manual',
     });
 
-    const setCookies = loginRes.headers.getSetCookie ? loginRes.headers.getSetCookie() : [];
+    // Extract cookies - try multiple methods
+    let setCookies = [];
+    if (loginRes.headers.getSetCookie) {
+      setCookies = loginRes.headers.getSetCookie();
+    } else {
+      // Fallback: try raw headers
+      const raw = loginRes.headers.get('set-cookie');
+      if (raw) setCookies = raw.split(/,(?=\s*\w+=)/);
+    }
+
     const validCookies = [];
     for (const cookie of setCookies) {
       const nameValue = cookie.split(';')[0].trim();
@@ -37,7 +46,7 @@ export const handler = async (event) => {
     cookieString = validCookies.join('; ');
 
     if (!cookieString.includes('bgg_username')) {
-      return { statusCode: 401, headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: "BGG login failed" }) };
+      return { statusCode: 401, headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: `BGG login failed (status ${loginRes.status}, cookies: ${setCookies.length})` }) };
     }
   } catch (err) {
     return { statusCode: 502, headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: "Login error: " + err.message }) };
