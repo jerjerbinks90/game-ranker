@@ -429,6 +429,7 @@ export default function App() {
 
     let totalSuccess = 0;
     let totalFailed = 0;
+    let lastResponse = null;
 
     // Send in batches of 10
     for (let i = 0; i < updates.length; i += 10) {
@@ -441,6 +442,7 @@ export default function App() {
           body: JSON.stringify({ updates: batch, username: bggUsername }),
         });
         const data = await res.json();
+        lastResponse = data;
         if (data.error) {
           setImportStatus("error");
           setImportMessage(`Push failed: ${data.error}`);
@@ -451,15 +453,20 @@ export default function App() {
         totalFailed += (data.total || 0) - (data.success || 0);
       } catch (err) {
         totalFailed += batch.length;
+        lastResponse = { catchError: err.message };
       }
       // Delay between batches
       if (i + 10 < updates.length) await new Promise(r => setTimeout(r, 1000));
     }
 
     setBggPushing(false);
-    setImportStatus(totalFailed === 0 ? "success" : "error");
-    setImportMessage(`Pushed ${totalSuccess} rating${totalSuccess !== 1 ? "s" : ""} to BGG.${totalFailed > 0 ? ` ${totalFailed} failed.` : ""}`);
-  };
+    setImportStatus(totalFailed === 0 && totalSuccess > 0 ? "success" : "error");
+    if (totalSuccess === 0 && totalFailed === 0) {
+      const debugInfo = lastResponse ? JSON.stringify(lastResponse).slice(0, 200) : "no response";
+      setImportMessage(`Push sent ${updates.length} games but got 0 results. Debug: ${debugInfo}`);
+    } else {
+      setImportMessage(`Pushed ${totalSuccess} rating${totalSuccess !== 1 ? "s" : ""} to BGG.${totalFailed > 0 ? ` ${totalFailed} failed.` : ""}`);
+    }  };
 
   // Export: encode full state as base64
   const handleExport = () => {
