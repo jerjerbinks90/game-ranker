@@ -63,10 +63,10 @@ function fuzzyFindMatch(bggName, existingNames) {
 
     const existWords = new Set(existNorm.split(/\s+/).filter(w => w.length > 0));
 
-    // All words from shorter name appear in longer name
+    // All words from shorter name appear in longer name (exact word match only)
     const [smaller, larger] = existWords.size <= bggWords.size ? [existWords, bggWords] : [bggWords, existWords];
-    const allContained = [...smaller].every(w => [...larger].some(lw => lw.includes(w) || w.includes(lw)));
-    if (allContained && smaller.size >= 1 && smaller.size > 0) {
+    const allContained = [...smaller].every(w => larger.has(w));
+    if (allContained && smaller.size >= 1) {
       const score = smaller.size / larger.size;
       if (score > bestScore) { bestScore = score; bestMatch = originalName; }
     }
