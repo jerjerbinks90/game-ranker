@@ -1,8 +1,14 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { createClient } from "@supabase/supabase-js";
 
 const SCORES = Array.from({ length: 21 }, (_, i) => +(10 - i * 0.5).toFixed(1));
 const STORAGE_KEY = "game-ranker-v2";
 const BGG_USERNAME_KEY = "game-ranker-bgg-username";
+
+const supabase = createClient(
+  "https://nkjbvuroovltdvomhzbf.supabase.co",
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5ramJ2dXJvb3ZsdGR2b21oemJmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY0NzgwNTEsImV4cCI6MjEwMjA1NDA1MX0.ygnWv2LbWZNoYS3B3o5aqkd6SUD-lJQPr1TFkOfbPVA"
+);
 
 const scoreColor = (s) => {
   if (s >= 9.5) return "#b8860b";
@@ -33,12 +39,12 @@ function roundToHalf(n) {
 function normalizeName(name) {
   return name
     .toLowerCase()
-    .replace(/\s*[:–—]\s.*$/, '')           // strip after colon/dash (subtitles)
-    .replace(/\s*\(.*?\)/g, '')              // strip parenthetical (years, etc.)
+    .replace(/\s*[:–—]\s.*$/, '')
+    .replace(/\s*\(.*?\)/g, '')
     .replace(/\b(deluxe|collector'?s?|big\s*box|revised|new)\s*(edition)?\b/g, '')
     .replace(/\b(second|third|fourth|2nd|3rd|4th|5th)\s*(edition)?\b/g, '')
     .replace(/\bedition\b/g, '')
-    .replace(/[^a-z0-9\s]/g, '')             // remove punctuation
+    .replace(/[^a-z0-9\s]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -48,7 +54,6 @@ function fuzzyFindMatch(bggName, existingNames) {
   const bggNorm = normalizeName(bggName);
   const bggWords = new Set(bggNorm.split(/\s+/).filter(w => w.length > 0));
 
-  // Exact match
   if (existingNames[bggLower]) return existingNames[bggLower];
 
   let bestMatch = null;
@@ -58,12 +63,10 @@ function fuzzyFindMatch(bggName, existingNames) {
     const existNorm = normalizeName(key);
     if (!existNorm) continue;
 
-    // Normalized exact match
     if (existNorm === bggNorm) return originalName;
 
     const existWords = new Set(existNorm.split(/\s+/).filter(w => w.length > 0));
 
-    // All words from shorter name appear in longer name (exact word match only)
     const [smaller, larger] = existWords.size <= bggWords.size ? [existWords, bggWords] : [bggWords, existWords];
     const allContained = [...smaller].every(w => larger.has(w));
     if (allContained && smaller.size >= 1) {
@@ -71,7 +74,6 @@ function fuzzyFindMatch(bggName, existingNames) {
       if (score > bestScore) { bestScore = score; bestMatch = originalName; }
     }
 
-    // Substring: one contains the other (min 4 chars)
     if (existNorm.length >= 4 && bggNorm.length >= 4) {
       if (bggNorm.includes(existNorm) || existNorm.includes(bggNorm)) {
         const score = Math.min(existNorm.length, bggNorm.length) / Math.max(existNorm.length, bggNorm.length);
@@ -104,7 +106,9 @@ function parseBGGCollection(xml) {
   return games;
 }
 
-function loadState() {
+const EMPTY_STATE = { buckets: {}, unranked: [], playCounts: {}, bggIds: {}, needsSort: [], collIds: {} };
+
+function loadLocalState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
@@ -119,16 +123,139 @@ function loadState() {
       };
     }
   } catch {}
-  return { buckets: {}, unranked: [], playCounts: {}, bggIds: {}, needsSort: [], collIds: {} };
+  return null;
 }
 
-function saveState(buckets, unranked, playCounts, bggIds, needsSort, collIds) {
+function saveLocalState(data) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ buckets, unranked, playCounts, bggIds, needsSort, collIds }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   } catch {}
 }
 
+// ─── Auth Screen ───────────────────────────────────────────
+
+function AuthScreen({ onAuth }) {
+  const [mode, setMode] = useState("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!email.trim() || !password.trim()) { setError("Enter both email and password."); return; }
+    if (mode === "signup" && password.length < 6) { setError("Password must be at least 6 characters."); return; }
+    setLoading(true);
+    setError("");
+
+    const { data, error: authErr } = mode === "signup"
+      ? await supabase.auth.signUp({ email: email.trim(), password })
+      : await supabase.auth.signInWithPassword({ email: email.trim(), password });
+
+    setLoading(false);
+
+    if (authErr) {
+      setError(authErr.message);
+      return;
+    }
+
+    if (mode === "signup" && data?.user && !data.session) {
+      setError("Check your email for a confirmation link, then log in.");
+      setMode("login");
+      return;
+    }
+
+    if (data?.session) onAuth(data.session);
+  };
+
+  return (
+    <div style={{ background: "#f5f0e8", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Space+Mono:wght@400;700&display=swap');
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        button:focus, input:focus { outline: none; }
+        input::placeholder { color: #bbb; }
+      `}</style>
+      <div style={{ background: "#fff", borderRadius: 16, padding: "32px 24px", width: "100%", maxWidth: 380, boxShadow: "0 4px 20px rgba(0,0,0,0.08)" }}>
+        <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 26, fontWeight: 700, color: "#2a2018", marginBottom: 4, textAlign: "center" }}>
+          Game Ranker
+        </div>
+        <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 11, color: "#aaa", textAlign: "center", marginBottom: 28, letterSpacing: 0.5 }}>
+          {mode === "login" ? "SIGN IN TO SYNC YOUR COLLECTION" : "CREATE YOUR ACCOUNT"}
+        </div>
+
+        <input
+          value={email} onChange={(e) => setEmail(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+          placeholder="Email"
+          type="email"
+          style={{
+            width: "100%", background: "#faf8f4", border: "1px solid #d8d0c0",
+            borderRadius: 8, color: "#2a2018", padding: "12px 14px",
+            fontSize: 14, fontFamily: "'Playfair Display', serif", marginBottom: 10,
+          }}
+        />
+        <input
+          value={password} onChange={(e) => setPassword(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+          placeholder="Password"
+          type="password"
+          style={{
+            width: "100%", background: "#faf8f4", border: "1px solid #d8d0c0",
+            borderRadius: 8, color: "#2a2018", padding: "12px 14px",
+            fontSize: 14, fontFamily: "'Playfair Display', serif", marginBottom: 16,
+          }}
+        />
+
+        {error && (
+          <div style={{
+            marginBottom: 12, padding: "8px 12px",
+            background: error.includes("Check your email") ? "#f0fdf4" : "#fdf0f0",
+            border: `1px solid ${error.includes("Check your email") ? "#a0d0b0" : "#e0a0a0"}`,
+            borderRadius: 8, fontSize: 12, fontFamily: "'Space Mono', monospace",
+            color: error.includes("Check your email") ? "#2a6a3a" : "#8a2a2a",
+            lineHeight: 1.5,
+          }}>
+            {error}
+          </div>
+        )}
+
+        <button
+          onClick={handleSubmit}
+          disabled={loading}
+          style={{
+            width: "100%", padding: "12px", background: loading ? "#ccc" : "#8a7a5a",
+            border: "none", borderRadius: 8, color: "#fff", fontWeight: 700,
+            cursor: loading ? "default" : "pointer",
+            fontFamily: "'Space Mono', monospace", fontSize: 13, letterSpacing: 0.5,
+            marginBottom: 12,
+          }}
+        >
+          {loading ? "..." : mode === "login" ? "SIGN IN" : "SIGN UP"}
+        </button>
+
+        <div style={{ textAlign: "center" }}>
+          <button
+            onClick={() => { setMode(mode === "login" ? "signup" : "login"); setError(""); }}
+            style={{
+              background: "none", border: "none", color: "#8a7a5a",
+              cursor: "pointer", fontSize: 12, fontFamily: "'Space Mono', monospace",
+              textDecoration: "underline",
+            }}
+          >
+            {mode === "login" ? "Need an account? Sign up" : "Already have an account? Sign in"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main App ──────────────────────────────────────────────
+
 export default function App() {
+  const [session, setSession] = useState(undefined); // undefined = loading, null = no session
+  const [dataLoaded, setDataLoaded] = useState(false);
+
   const [buckets, setBuckets] = useState({});
   const [unranked, setUnranked] = useState([]);
   const [playCounts, setPlayCounts] = useState({});
@@ -141,9 +268,6 @@ export default function App() {
   const [importMessage, setImportMessage] = useState("");
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState(new Set());
-  const [showSync, setShowSync] = useState(false);
-  const [syncImportText, setSyncImportText] = useState("");
-  const [syncMessage, setSyncMessage] = useState("");
   const [showAddOverlay, setShowAddOverlay] = useState(false);
   const [addOverlayInput, setAddOverlayInput] = useState("");
   const [addOverlayScore, setAddOverlayScore] = useState(null);
@@ -157,29 +281,143 @@ export default function App() {
   const [showBggSetup, setShowBggSetup] = useState(false);
   const [bggSyncing, setBggSyncing] = useState(false);
   const [bggPushing, setBggPushing] = useState(false);
+  const [showAccount, setShowAccount] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(null);
 
-  // ... refs
   const drag = useRef(null);
   const [dragOver, setDragOver] = useState(null);
-  const syncTextRef = useRef(null);
   const bucketRefs = useRef({});
   const addOverlayInputRef = useRef(null);
   const searchInputRef = useRef(null);
   const headerRef = useRef(null);
   const [headerHeight, setHeaderHeight] = useState(120);
 
+  // Cloud sync refs
+  const saveTimeoutRef = useRef(null);
+  const lastSaveTime = useRef(0);
+
   const needsSortSet = useMemo(() => new Set(needsSort), [needsSort]);
   const searchLower = searchQuery.toLowerCase().trim();
 
+  // ─── Auth ────────────────────────────────────────────────
+
   useEffect(() => {
-    const { buckets: b, unranked: u, playCounts: p, bggIds: ids, needsSort: ns, collIds: cids } = loadState();
-    setBuckets(b);
-    setUnranked(u);
-    setPlayCounts(p || {});
-    setBggIds(ids || {});
-    setNeedsSort(ns || []);
-    setCollIds(cids || {});
+    supabase.auth.getSession().then(({ data: { session: s } }) => {
+      setSession(s);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s);
+    });
+    return () => subscription.unsubscribe();
   }, []);
+
+  // ─── Load data from Supabase (or migrate localStorage) ──
+
+  useEffect(() => {
+    if (!session?.user) return;
+
+    const loadCloudData = async () => {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("game_data")
+        .eq("id", session.user.id)
+        .single();
+
+      if (profile?.game_data && Object.keys(profile.game_data).length > 0) {
+        // Cloud data exists — use it
+        const d = profile.game_data;
+        setBuckets(d.buckets || {});
+        setUnranked(d.unranked || []);
+        setPlayCounts(d.playCounts || {});
+        setBggIds(d.bggIds || {});
+        setNeedsSort(d.needsSort || []);
+        setCollIds(d.collIds || {});
+        saveLocalState(d);
+      } else {
+        // No cloud data — check localStorage for existing data to migrate
+        const local = loadLocalState();
+        if (local) {
+          setBuckets(local.buckets);
+          setUnranked(local.unranked);
+          setPlayCounts(local.playCounts);
+          setBggIds(local.bggIds);
+          setNeedsSort(local.needsSort);
+          setCollIds(local.collIds);
+
+          // Migrate up to cloud
+          await supabase.from("profiles").upsert({
+            id: session.user.id,
+            game_data: local,
+            updated_at: new Date().toISOString(),
+          });
+        } else {
+          // Fresh start — create empty profile
+          await supabase.from("profiles").upsert({
+            id: session.user.id,
+            game_data: EMPTY_STATE,
+            updated_at: new Date().toISOString(),
+          });
+        }
+      }
+      setDataLoaded(true);
+    };
+
+    loadCloudData();
+  }, [session?.user?.id]);
+
+  // ─── Real-time sync ─────────────────────────────────────
+
+  useEffect(() => {
+    if (!session?.user) return;
+
+    const channel = supabase
+      .channel("profile-sync")
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "profiles",
+          filter: `id=eq.${session.user.id}`,
+        },
+        (payload) => {
+          const remoteTime = new Date(payload.new.updated_at).getTime();
+          // Only apply if this update came from another device
+          if (remoteTime <= lastSaveTime.current) return;
+
+          const d = payload.new.game_data;
+          if (!d) return;
+          setBuckets(d.buckets || {});
+          setUnranked(d.unranked || []);
+          setPlayCounts(d.playCounts || {});
+          setBggIds(d.bggIds || {});
+          setNeedsSort(d.needsSort || []);
+          setCollIds(d.collIds || {});
+          saveLocalState(d);
+        }
+      )
+      .subscribe();
+
+    return () => supabase.removeChannel(channel);
+  }, [session?.user?.id]);
+
+  // ─── Save helpers ───────────────────────────────────────
+
+  const saveToCloud = useCallback((data) => {
+    if (!session?.user) return;
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = setTimeout(async () => {
+      const now = Date.now();
+      lastSaveTime.current = now;
+      await supabase.from("profiles").upsert({
+        id: session.user.id,
+        game_data: data,
+        updated_at: new Date(now).toISOString(),
+      });
+    }, 500);
+  }, [session?.user?.id]);
+
+  // ─── Header measurement ─────────────────────────────────
 
   useEffect(() => {
     if (!headerRef.current) return;
@@ -188,7 +426,9 @@ export default function App() {
     const observer = new ResizeObserver(measure);
     observer.observe(headerRef.current);
     return () => observer.disconnect();
-  }, []);
+  }, [dataLoaded]);
+
+  // ─── Scroll tracking ───────────────────────────────────
 
   useEffect(() => {
     let ticking = false;
@@ -224,12 +464,17 @@ export default function App() {
 
   const setBucketRef = useCallback((bucket) => (el) => { bucketRefs.current[bucket] = el; }, []);
 
+  // ─── Core state helpers ─────────────────────────────────
+
   const commit = (b, u, p, ids, ns, cids) => {
     const finalIds = ids ?? bggIds;
     const finalNs = ns ?? needsSort;
     const finalCids = cids ?? collIds;
     setBuckets(b); setUnranked(u); setPlayCounts(p); setBggIds(finalIds); setNeedsSort(finalNs); setCollIds(finalCids);
-    saveState(b, u, p, finalIds, finalNs, finalCids);
+
+    const data = { buckets: b, unranked: u, playCounts: p, bggIds: finalIds, needsSort: finalNs, collIds: finalCids };
+    saveLocalState(data);
+    saveToCloud(data);
   };
 
   const addGame = () => {
@@ -256,7 +501,8 @@ export default function App() {
     setShowAddOverlay(false);
   };
 
-  // BGG Sync
+  // ─── BGG Sync ───────────────────────────────────────────
+
   const syncWithBGG = async (username) => {
     setBggSyncing(true);
     setImportStatus("loading");
@@ -276,7 +522,6 @@ export default function App() {
         }
 
         if (!response.ok) {
-          const text = await response.text();
           throw new Error(`BGG returned ${response.status}`);
         }
 
@@ -308,14 +553,12 @@ export default function App() {
       return;
     }
 
-    // Build lookup of existing games (by name, case-insensitive)
     const existingByName = {};
     Object.entries(buckets).forEach(([score, games]) => {
       games.forEach(name => { existingByName[name.toLowerCase()] = name; });
     });
     unranked.forEach(name => { existingByName[name.toLowerCase()] = name; });
 
-    // Build reverse lookup of existing BGG IDs
     const existingByBggId = {};
     Object.entries(bggIds).forEach(([name, id]) => { existingByBggId[id] = name; });
 
@@ -332,11 +575,9 @@ export default function App() {
     let unmatched = [];
 
     bggGames.forEach(({ id, name: bggName, plays, rating, collid }) => {
-      // Try to find existing game: first by BGG ID, then by name (fuzzy)
       const existingName = existingByBggId[id] || fuzzyFindMatch(bggName, existingByName);
 
       if (existingName) {
-        // Game exists — update play count, link BGG ID and collid if needed
         newP[existingName] = Math.max(plays, newP[existingName] || 0);
         if (!newIds[existingName]) {
           newIds[existingName] = id;
@@ -345,7 +586,6 @@ export default function App() {
         if (collid) newCids[existingName] = collid;
         updated++;
       } else {
-        // New game — add to bucket based on rating or unranked
         newIds[bggName] = id;
         if (collid) newCids[bggName] = collid;
         newP[bggName] = plays;
@@ -360,7 +600,6 @@ export default function App() {
         added++;
         unmatched.push(bggName);
 
-        // Register in lookup so duplicates within BGG response are caught
         existingByName[bggName.toLowerCase()] = bggName;
         existingByBggId[id] = bggName;
       }
@@ -368,7 +607,6 @@ export default function App() {
 
     commit(newB, newU, newP, newIds, newNs, newCids);
 
-    // Save username
     localStorage.setItem(BGG_USERNAME_KEY, username);
     setBggUsername(username);
 
@@ -408,7 +646,6 @@ export default function App() {
     setImportStatus("loading");
     setImportMessage("Pushing ratings to BGG...");
 
-    // Collect all ranked games that have both a BGG ID and a collid
     const updates = [];
     Object.entries(buckets).forEach(([score, games]) => {
       games.forEach(name => {
@@ -431,7 +668,6 @@ export default function App() {
     let totalFailed = 0;
     let lastResponse = null;
 
-    // Send in batches of 10
     for (let i = 0; i < updates.length; i += 10) {
       const batch = updates.slice(i, i + 10);
       setImportMessage(`Pushing ratings to BGG... (${i}/${updates.length})`);
@@ -455,7 +691,6 @@ export default function App() {
         totalFailed += batch.length;
         lastResponse = { catchError: err.message };
       }
-      // Delay between batches
       if (i + 10 < updates.length) await new Promise(r => setTimeout(r, 1000));
     }
 
@@ -466,28 +701,10 @@ export default function App() {
       setImportMessage(`Push sent ${updates.length} games but got 0 results. Debug: ${debugInfo}`);
     } else {
       setImportMessage(`Pushed ${totalSuccess} rating${totalSuccess !== 1 ? "s" : ""} to BGG.${totalFailed > 0 ? ` ${totalFailed} failed.` : ""}`);
-    }  };
-
-  // Export: encode full state as base64
-  const handleExport = () => {
-    const data = JSON.stringify({ buckets, unranked, playCounts, bggIds, needsSort, collIds });
-    const encoded = btoa(unescape(encodeURIComponent(data)));
-    setSyncImportText(encoded);
-    setTimeout(() => syncTextRef.current?.select(), 50);
-  };
-
-  // Import: decode base64 and restore state
-  const handleSyncImport = () => {
-    try {
-      const decoded = decodeURIComponent(escape(atob(syncImportText.trim())));
-      const { buckets: b, unranked: u, playCounts: p, bggIds: ids, needsSort: ns, collIds: cids } = JSON.parse(decoded);
-      commit(b || {}, u || [], p || {}, ids || {}, ns || [], cids || {});
-      setSyncMessage("Synced successfully!");
-      setTimeout(() => { setSyncMessage(""); setShowSync(false); setSyncImportText(""); }, 2500);
-    } catch {
-      setSyncMessage("Invalid code. Copy it again from your other device.");
     }
   };
+
+  // ─── Selection / delete ─────────────────────────────────
 
   const toggleSelectMode = () => {
     setSelectMode(!selectMode);
@@ -510,6 +727,8 @@ export default function App() {
     setSelectMode(false);
     commit(b, u, playCounts, undefined, ns);
   };
+
+  // ─── Move / reorder ─────────────────────────────────────
 
   const getList = (bucket) => bucket === "unranked" ? unranked : buckets[bucket] || [];
 
@@ -558,12 +777,24 @@ export default function App() {
   const deleteGame = (bucket, idx, e) => {
     e.stopPropagation();
     const name = getList(bucket)[idx];
+    setConfirmDelete({ bucket, idx, name });
+  };
+
+  const confirmDeleteGame = () => {
+    if (!confirmDelete) return;
+    const { bucket, idx, name } = confirmDelete;
     if (held?.bucket === bucket && held?.idx === idx) setHeld(null);
     let b = { ...buckets }; let u = [...unranked];
     if (bucket === "unranked") { u.splice(idx, 1); } else { b[bucket] = [...(b[bucket] || [])]; b[bucket].splice(idx, 1); }
     const ns = needsSort.filter(n => n !== name);
-    commit(b, u, playCounts, undefined, ns);
+    const newP = { ...playCounts }; delete newP[name];
+    const newIds = { ...bggIds }; delete newIds[name];
+    const newCids = { ...collIds }; delete newCids[name];
+    commit(b, u, newP, newIds, ns, newCids);
+    setConfirmDelete(null);
   };
+
+  // ─── Drag and drop ─────────────────────────────────────
 
   const onDragStart = (bucket, idx) => { if (selectMode) return; drag.current = { bucket, idx }; };
   const onDragOver = (e, bucket, insertBefore) => { e.preventDefault(); setDragOver({ bucket, insertBefore }); };
@@ -577,10 +808,29 @@ export default function App() {
   };
   const onDragEnd = () => { drag.current = null; setDragOver(null); };
 
+  // ─── Sign out ───────────────────────────────────────────
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    setSession(null);
+    setDataLoaded(false);
+    setBuckets({});
+    setUnranked([]);
+    setPlayCounts({});
+    setBggIds({});
+    setCollIds({});
+    setNeedsSort([]);
+    setShowAccount(false);
+  };
+
+  // ─── Ranks ──────────────────────────────────────────────
+
   const ranks = {};
   let r = 1;
   SCORES.forEach((s) => (buckets[s] || []).forEach((_, i) => { ranks[`${s}-${i}`] = r++; }));
   const totalRanked = r - 1;
+
+  // ─── Render bucket ──────────────────────────────────────
 
   const renderBucket = (bucket, label, color, isUnrankedBucket = false) => {
     const games = getList(bucket);
@@ -718,6 +968,32 @@ export default function App() {
     );
   };
 
+  // ─── Auth gate ──────────────────────────────────────────
+
+  if (session === undefined) {
+    return (
+      <div style={{ background: "#f5f0e8", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <style>{`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&display=swap');`}</style>
+        <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 22, color: "#aaa" }}>Loading...</div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <AuthScreen onAuth={(s) => setSession(s)} />;
+  }
+
+  if (!dataLoaded) {
+    return (
+      <div style={{ background: "#f5f0e8", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <style>{`@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&display=swap');`}</style>
+        <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 22, color: "#aaa" }}>Syncing your collection...</div>
+      </div>
+    );
+  }
+
+  // ─── Main render ────────────────────────────────────────
+
   return (
     <div style={{ background: "#f5f0e8", minHeight: "100vh" }}>
       <style>{`
@@ -777,17 +1053,36 @@ export default function App() {
             }}>
               PUSH
             </button>
-            <button onClick={() => { setShowSync(!showSync); setSyncMessage(""); setSyncImportText(""); }} style={{
-              background: showSync ? "#edf3f7" : "#f5f0e8",
-              border: `1px solid ${showSync ? "#a0b8d0" : "#d0c8b8"}`,
-              borderRadius: 8, color: showSync ? "#2a6080" : "#8a7a5a",
+            <button onClick={() => setShowAccount(!showAccount)} style={{
+              background: showAccount ? "#edf3f7" : "#f5f0e8",
+              border: `1px solid ${showAccount ? "#a0b8d0" : "#d0c8b8"}`,
+              borderRadius: 8, color: showAccount ? "#2a6080" : "#8a7a5a",
               padding: "6px 10px", cursor: "pointer",
               fontFamily: "'Space Mono', monospace", fontSize: 11, letterSpacing: 0.5,
             }}>
-              SYNC
+              ⚙
             </button>
           </div>
         </div>
+
+        {/* Account panel */}
+        {showAccount && (
+          <div style={{ marginBottom: 10, padding: "12px", background: "#edf3f7", border: "1px solid #a0b8d0", borderRadius: 8 }}>
+            <div style={{ fontSize: 11, fontFamily: "'Space Mono', monospace", color: "#2a6080", marginBottom: 8, letterSpacing: 0.5 }}>
+              SIGNED IN AS
+            </div>
+            <div style={{ fontSize: 13, fontFamily: "'Playfair Display', serif", color: "#2a2018", marginBottom: 12 }}>
+              {session.user.email}
+            </div>
+            <button onClick={handleSignOut} style={{
+              padding: "8px 16px", background: "#c0392b", border: "none",
+              borderRadius: 6, color: "#fff", cursor: "pointer",
+              fontFamily: "'Space Mono', monospace", fontSize: 11, letterSpacing: 0.5, fontWeight: 700,
+            }}>
+              SIGN OUT
+            </button>
+          </div>
+        )}
 
         {/* BGG username setup */}
         {showBggSetup && (
@@ -834,43 +1129,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Sync panel */}
-        {showSync && (
-          <div style={{ marginBottom: 10, padding: "12px", background: "#edf3f7", border: "1px solid #a0b8d0", borderRadius: 8 }}>
-            <div style={{ fontSize: 11, fontFamily: "'Space Mono', monospace", color: "#2a6080", marginBottom: 8, letterSpacing: 0.5 }}>SYNC ACROSS DEVICES</div>
-            <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-              <button onClick={handleExport} style={{
-                flex: 1, padding: "8px", background: "#2a6080", border: "none",
-                borderRadius: 6, color: "#fff", cursor: "pointer",
-                fontFamily: "'Space Mono', monospace", fontSize: 11, letterSpacing: 0.5,
-              }}>EXPORT CODE</button>
-              <button onClick={handleSyncImport} disabled={!syncImportText.trim()} style={{
-                flex: 1, padding: "8px", background: syncImportText.trim() ? "#4a7c3f" : "#ccc",
-                border: "none", borderRadius: 6, color: "#fff",
-                cursor: syncImportText.trim() ? "pointer" : "default",
-                fontFamily: "'Space Mono', monospace", fontSize: 11, letterSpacing: 0.5,
-              }}>IMPORT CODE</button>
-            </div>
-            <textarea
-              ref={syncTextRef}
-              value={syncImportText}
-              onChange={(e) => setSyncImportText(e.target.value)}
-              placeholder="Export generates a code here. To sync another device, paste that code here and hit Import."
-              style={{
-                width: "100%", height: 72, background: "#fff", border: "1px solid #a0b8d0",
-                borderRadius: 6, padding: "8px", fontSize: 11,
-                fontFamily: "'Space Mono', monospace", color: "#2a2018",
-                resize: "none", lineHeight: 1.4,
-              }}
-            />
-            {syncMessage && (
-              <div style={{ marginTop: 6, fontSize: 11, fontFamily: "'Space Mono', monospace", color: syncMessage.includes("success") ? "#2a6a3a" : "#8a2a2a" }}>
-                {syncMessage}
-              </div>
-            )}
-          </div>
-        )}
-
         {showSearch && (
           <div style={{ marginBottom: 10 }}>
             <input
@@ -887,7 +1145,7 @@ export default function App() {
           </div>
         )}
 
-        {!selectMode && !showSync && !showBggSetup && !showSearch && (
+        {!selectMode && !showBggSetup && !showSearch && !showAccount && (
           <div style={{ display: "flex", gap: 8 }}>
             <input
               value={input} onChange={(e) => setInput(e.target.value)}
@@ -1019,6 +1277,50 @@ export default function App() {
                   fontFamily: "'Space Mono', monospace", fontSize: 12,
                 }}
               >CONFIRM</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete confirmation overlay */}
+      {confirmDelete && (
+        <div
+          onClick={(e) => { if (e.target === e.currentTarget) setConfirmDelete(null); }}
+          style={{
+            position: "fixed", inset: 0, zIndex: 70,
+            background: "rgba(0,0,0,0.3)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            padding: "0 20px",
+          }}
+        >
+          <div style={{
+            background: "#fff", borderRadius: 16, padding: "20px 20px 16px",
+            width: "100%", maxWidth: 340,
+            boxShadow: "0 4px 20px rgba(0,0,0,0.15)",
+          }}>
+            <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 16, fontWeight: 700, color: "#2a2018", marginBottom: 8 }}>
+              Delete Game?
+            </div>
+            <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 14, color: "#555", marginBottom: 16 }}>
+              Remove <strong>{confirmDelete.name}</strong> from your collection?
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                onClick={() => setConfirmDelete(null)}
+                style={{
+                  flex: 1, padding: "10px", background: "#f5f0e8", border: "1px solid #d0c8b8",
+                  borderRadius: 8, color: "#8a7a5a", fontWeight: 700,
+                  cursor: "pointer", fontFamily: "'Space Mono', monospace", fontSize: 12,
+                }}
+              >CANCEL</button>
+              <button
+                onClick={confirmDeleteGame}
+                style={{
+                  flex: 1, padding: "10px", background: "#c0392b", border: "none",
+                  borderRadius: 8, color: "#fff", fontWeight: 700,
+                  cursor: "pointer", fontFamily: "'Space Mono', monospace", fontSize: 12,
+                }}
+              >DELETE</button>
             </div>
           </div>
         </div>
